@@ -1,4 +1,4 @@
-# Fetchdex
+# Fetchdex (in-progress)
 
 Fetchdex has two user-facing workflows:
 
