@@ -1,0 +1,53 @@
+[
+  {
+    "id": "aws_dms",
+    "question": "Which AWS service can migrate databases?",
+    "expected_sources": [
+      "test_doc2.txt"
+    ],
+    "expected_answer_contains": [
+      "DMS"
+    ],
+    "should_answer": true
+  },
+  {
+    "id": "aws_ecr",
+    "question": "Which AWS service stores container images?",
+    "expected_sources": [
+      "test_doc2.txt"
+    ],
+    "expected_answer_contains": [
+      "ECR"
+    ],
+    "should_answer": true
+  },
+  {
+    "id": "fastapi_validation",
+    "question": "What does FastAPI use for request validation?",
+    "expected_sources": [
+      "test_doc1.txt"
+    ],
+    "expected_answer_contains": [
+      "Pydantic"
+    ],
+    "should_answer": true
+  },
+  {
+    "id": "fastapi_timeouts",
+    "question": "How should an application avoid waiting forever for an external service?",
+    "expected_sources": [
+      "test_doc1.txt"
+    ],
+    "expected_answer_contains": [
+      "timeout"
+    ],
+    "should_answer": true
+  },
+  {
+    "id": "unsupported_question",
+    "question": "Who wrote The Lord of the Rings?",
+    "expected_sources": [],
+    "expected_answer_contains": [],
+    "should_answer": false
+  }
+]

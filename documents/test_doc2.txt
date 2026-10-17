@@ -1,0 +1,11 @@
+Amazon Web Services provides cloud infrastructure and managed services.
+
+Amazon RDS is a managed relational database service.
+
+AWS DMS stands for Database Migration Service and can be used to migrate databases.
+
+Amazon ECS is a container orchestration service.
+
+Amazon ECR is a container image registry.
+
+Terraform can be used to provision AWS infrastructure using infrastructure as code.

@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fetchdex Simplified - Four-Flow Tutorial</title>
+  <style>
+:root { --ink:#21332d; --muted:#68766f; --paper:#fffef9; --panel:#eef2eb;
+        --line:#d9e1d8; --accent:#286247; --code:#f4f6f1; }
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; scroll-padding-top:24px; }
+body { margin:0; color:var(--ink); background:var(--paper);
+       font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+aside { position:fixed; inset:0 auto 0 0; width:275px; padding:28px 22px;
+        overflow:auto; background:var(--panel); border-right:1px solid var(--line); }
+aside strong { display:block; font-size:25px; letter-spacing:-.6px; }
+aside p { margin:2px 0 20px; color:var(--muted); font-size:13px; }
+nav a { display:block; padding:7px 0; color:var(--ink); text-decoration:none;
+        border-bottom:1px solid var(--line); font-size:13px; line-height:1.35; }
+nav a.level-1 { margin-top:8px; font-weight:700; }
+main { margin-left:275px; max-width:1180px; padding:48px 6vw 90px; }
+h1 { max-width:850px; margin:0 0 22px; font-size:39px; line-height:1.15; letter-spacing:-1px; }
+h2 { margin-top:62px; padding-top:18px; border-top:2px solid var(--line);
+     font-size:29px; line-height:1.25; }
+h3 { margin-top:34px; font-size:21px; }
+p, ul, ol { max-width:900px; }
+a { color:var(--accent); text-underline-offset:3px; }
+code, pre { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+p code, li code, td code { padding:2px 5px; background:var(--code); border-radius:4px; }
+pre { max-width:100%; padding:18px; overflow:auto; background:var(--code);
+      border:1px solid var(--line); border-radius:8px; font-size:13px; line-height:1.55; }
+table { width:100%; margin:22px 0; border-collapse:collapse; font-size:14px; }
+th, td { padding:10px 13px; text-align:left; vertical-align:top;
+         border-bottom:1px solid var(--line); }
+th { background:var(--panel); font-size:12px; letter-spacing:.04em; }
+blockquote { margin:20px 0; padding:3px 20px; border-left:4px solid #82a188;
+             background:var(--code); }
+.badge { display:inline-block; margin-top:8px; padding:4px 8px; color:white;
+         background:var(--accent); border-radius:4px; font-size:12px; }
+@media (max-width:900px) {
+  aside { position:static; width:auto; }
+  nav { columns:2; }
+  main { margin:0; padding:32px 20px 70px; }
+  h1 { font-size:32px; }
+}
+@media print {
+  aside { display:none; }
+  main { margin:0; padding:0; max-width:none; }
+  h2 { break-before:page; }
+}
+</style>
+</head>
+<body>
+  <aside>
+    <strong>Fetchdex Simplified</strong>
+    <p>Four flows, two entry points</p>
+    <span class="badge">Offline documentation</span>
+    <nav><a class="level-1" href="#fetchdex-simplified-four-flows-two-entry-points">Fetchdex Simplified: Four Flows, Two Entry Points</a><a class="level-2" href="#1-big-picture">1. Big Picture</a><a class="level-2" href="#2-project-structure">2. Project Structure</a><a class="level-2" href="#3-preparation-build-the-search-index">3. Preparation: Build the Search Index</a><a class="level-1" href="#flow-1-semantic-search">Flow 1 — Semantic Search</a><a class="level-2" href="#purpose">Purpose</a><a class="level-2" href="#files-and-functions">Files and functions</a><a class="level-2" href="#what-this-flow-does-not-call">What this flow does not call</a><a class="level-1" href="#flow-2-grounded-rag-answer">Flow 2 — Grounded RAG Answer</a><a class="level-2" href="#purpose-2">Purpose</a><a class="level-2" href="#files-and-functions-2">Files and functions</a><a class="level-2" href="#empty-evidence-and-model-failure">Empty evidence and model failure</a><a class="level-2" href="#what-grounding-does-and-does-not-guarantee">What grounding does and does not guarantee</a><a class="level-1" href="#flow-3-list-documents">Flow 3 — List Documents</a><a class="level-2" href="#purpose-3">Purpose</a><a class="level-2" href="#files-and-functions-3">Files and functions</a><a class="level-2" href="#what-this-flow-does-not-call-2">What this flow does not call</a><a class="level-1" href="#flow-4-read-a-document">Flow 4 — Read a Document</a><a class="level-2" href="#purpose-4">Purpose</a><a class="level-2" href="#files-and-functions-4">Files and functions</a><a class="level-2" href="#what-this-flow-does-not-call-3">What this flow does not call</a><a class="level-1" href="#8-how-the-ai-assistant-chooses-among-three-tools">8. How the AI Assistant Chooses Among Three Tools</a><a class="level-1" href="#9-api-and-server-roles">9. API and Server Roles</a><a class="level-1" href="#10-evaluation">10. Evaluation</a><a class="level-1" href="#11-complete-function-map">11. Complete Function Map</a><a class="level-2" href="#source-knowledge-py-4">source/knowledge.py</a><a class="level-2" href="#source-rag-py-2">source/rag.py</a><a class="level-2" href="#source-assistant-py-4">source/assistant.py</a><a class="level-2" href="#source-api-py-3">source/api.py</a><a class="level-2" href="#source-evaluation-py">source/evaluation.py</a><a class="level-1" href="#12-commands">12. Commands</a><a class="level-1" href="#13-final-mental-model">13. Final Mental Model</a></nav>
+  </aside>
+  <main><h1 id="fetchdex-simplified-four-flows-two-entry-points">Fetchdex Simplified: Four Flows, Two Entry Points</h1>
+<p>This tutorial explains the simplified Fetchdex project from the outside in. It follows the current code in this folder.</p>
+<p>Users see two entry points:</p>
+<pre><code class="language-text">Fetchdex
+├── Semantic Search
+│   └── embeddings + Chroma
+└── AI Assistant
+    ├── grounded RAG answer
+    ├── list documents
+    └── read a document
+</code></pre>
+<p>That produces four flows to understand:</p>
+<ol>
+<li>Semantic Search.</li>
+<li>Grounded RAG Answer.</li>
+<li>List Documents.</li>
+<li>Read a Document.</li>
+</ol>
+<p>The former standalone RAG option was not deleted. It became the AI Assistant's <code>grounded_answer</code> tool.</p>
+<h2 id="1-big-picture">1. Big Picture</h2>
+<p>Fetchdex turns local text documents into searchable data and lets a local language model work with those documents.</p>
+<pre><code class="language-text">documents/*.txt
+      ↓
+load and split into chunks
+      ↓
+MiniLM embedding vectors
+      ↓
+Chroma database on disk
+      ↓
+semantic results or grounded AI answers
+</code></pre>
+<p>Two different models have different jobs:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>all-MiniLM-L6-v2</code></td>
+<td>Convert passages and questions into vectors for similarity search.</td>
+</tr>
+<tr>
+<td><code>qwen3:1.7b</code></td>
+<td>Select assistant tools and generate natural-language answers.</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-text">Embedding model != language model
+Chroma != Ollama
+FastAPI != Uvicorn
+Semantic search != RAG
+RAG != agent routing
+</code></pre>
+<p>The project does not train either model. It calls existing models locally.</p>
+<h2 id="2-project-structure">2. Project Structure</h2>
+<pre><code class="language-text">Fetchdex-Simplified/
+├── source/
+│   ├── __init__.py      marks source as a Python package
+│   ├── knowledge.py     documents, chunks, embeddings, Chroma, search
+│   ├── rag.py           retrieval-grounded generation and citations
+│   ├── assistant.py     tool definitions and agent loop
+│   ├── api.py           HTTP routes for search and assistant
+│   └── evaluation.py    retrieval and RAG checks
+├── documents/           input .txt files
+├── evaluation/
+│   └── golden_dataset.json
+├── docs/
+│   ├── tutorial.md
+│   └── tutorial.html
+├── tests/
+│   └── test_workflows.py
+├── requirements.txt
+└── README.md
+</code></pre>
+<p>There is no single file that executes everything. Each command starts at a different entry point:</p>
+<table>
+<thead>
+<tr>
+<th>Command or request</th>
+<th>Entry point</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>python -m source.knowledge index</code></td>
+<td><code>knowledge.main()</code></td>
+</tr>
+<tr>
+<td><code>GET /search</code></td>
+<td><code>api.search()</code></td>
+</tr>
+<tr>
+<td><code>POST /ask</code></td>
+<td><code>api.ask()</code></td>
+</tr>
+<tr>
+<td><code>python -m source.assistant &quot;...&quot;</code></td>
+<td><code>assistant.main()</code></td>
+</tr>
+<tr>
+<td><code>python -m source.evaluation retrieval</code></td>
+<td><code>evaluation.main()</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-preparation-build-the-search-index">3. Preparation: Build the Search Index</h2>
+<p>All four flows depend on the source documents. Semantic search and RAG also depend on the Chroma index.</p>
+<p>Run:</p>
+<pre><code class="language-bash">python -m source.knowledge preview
+python -m source.knowledge index
+</code></pre>
+<p>The indexing sequence is:</p>
+<pre><code class="language-text">load_documents()
+      ↓
+chunk_documents()
+      ↓
+get_embedding_model()
+      ↓
+encode_document(...)
+      ↓
+get_collection()
+      ↓
+collection.upsert(...)
+</code></pre>
+<h3 id="file-source-knowledge-py">File: <code>source/knowledge.py</code></h3>
+<p>This file owns the complete knowledge-base lifecycle.</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>load_documents()</code></td>
+<td>Reads sorted <code>.txt</code> files and returns filename/text dictionaries.</td>
+</tr>
+<tr>
+<td><code>chunk_text()</code></td>
+<td>Splits one string into overlapping 40-word windows with 10-word overlap.</td>
+</tr>
+<tr>
+<td><code>chunk_documents()</code></td>
+<td>Applies chunking to every document and adds source metadata.</td>
+</tr>
+<tr>
+<td><code>get_embedding_model()</code></td>
+<td>Lazily loads MiniLM once per Python process.</td>
+</tr>
+<tr>
+<td><code>get_collection()</code></td>
+<td>Lazily opens the persistent Chroma collection once per process.</td>
+</tr>
+<tr>
+<td><code>index_documents()</code></td>
+<td>Coordinates chunking, embedding, and Chroma upsert.</td>
+</tr>
+<tr>
+<td><code>semantic_search()</code></td>
+<td>Embeds a question and returns nearest stored chunks.</td>
+</tr>
+<tr>
+<td><code>preview_documents()</code></td>
+<td>Prints chunks without writing the database.</td>
+</tr>
+<tr>
+<td><code>main()</code></td>
+<td>Selects <code>preview</code> or <code>index</code> from the command line.</td>
+</tr>
+</tbody>
+</table>
+<p><code>@lru_cache(maxsize=1)</code> is important. The first call creates the model or collection object. Later calls in that process reuse it.</p>
+<p>Chunk overlap preserves context at boundaries:</p>
+<pre><code class="language-text">chunk 0: words  0–39
+chunk 1: words 30–69
+chunk 2: words 60–99
+</code></pre>
+<p><code>upsert</code> inserts a new chunk ID or updates an existing one. It does not automatically delete stale IDs left by removed or shortened documents.</p>
+<h1 id="flow-1-semantic-search">Flow 1 — Semantic Search</h1>
+<h2 id="purpose">Purpose</h2>
+<p>Return relevant document passages without asking Qwen3 to produce an answer.</p>
+<pre><code class="language-text">GET /search?q=database+migration&amp;k=3
+      ↓
+api.search()
+      ↓
+knowledge.semantic_search()
+      ↓
+MiniLM encodes the question
+      ↓
+Chroma compares it with stored chunk vectors
+      ↓
+raw matching chunks + filenames + distances
+</code></pre>
+<h2 id="files-and-functions">Files and functions</h2>
+<h3 id="source-api-py"><code>source/api.py</code></h3>
+<p><code>search()</code> is the HTTP boundary. FastAPI validates:</p>
+<ul>
+<li><code>q</code>: required text, 1–1000 characters.</li>
+<li><code>k</code>: integer from 1–10, default 3.</li>
+</ul>
+<p>It converts application errors into HTTP responses:</p>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th style="text-align:right">HTTP status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Invalid direct search input</td>
+<td style="text-align:right">400</td>
+</tr>
+<tr>
+<td>Embedding/database search failure</td>
+<td style="text-align:right">503</td>
+</tr>
+<tr>
+<td>Unexpected failure</td>
+<td style="text-align:right">500</td>
+</tr>
+</tbody>
+</table>
+<h3 id="source-knowledge-py"><code>source/knowledge.py</code></h3>
+<p><code>semantic_search(query, k)</code> performs the actual workflow:</p>
+<ol>
+<li>Reject blank queries and <code>k &lt; 1</code>.</li>
+<li>Open the cached Chroma collection.</li>
+<li>Return <code>[]</code> if the collection is empty.</li>
+<li>Encode the question with <code>encode_query()</code>.</li>
+<li>Ask Chroma for the nearest vectors.</li>
+<li>Convert Chroma's batched response into ordinary dictionaries.</li>
+</ol>
+<p>The result looks like:</p>
+<pre><code class="language-json">{
+  &quot;query&quot;: &quot;database migration&quot;,
+  &quot;results&quot;: [
+    {
+      &quot;chunk_id&quot;: &quot;test_doc2.txt-0&quot;,
+      &quot;text&quot;: &quot;AWS DMS stands for Database Migration Service...&quot;,
+      &quot;metadata&quot;: {
+        &quot;source&quot;: &quot;test_doc2.txt&quot;,
+        &quot;chunk_number&quot;: 0
+      },
+      &quot;distance&quot;: 0.18
+    }
+  ]
+}
+</code></pre>
+<p>The distance above is illustrative. With cosine distance, a lower value means a closer match.</p>
+<h2 id="what-this-flow-does-not-call">What this flow does not call</h2>
+<ul>
+<li>It does not call Ollama.</li>
+<li>It does not load Qwen3.</li>
+<li>It does not generate an answer.</li>
+<li>It does not guarantee that a result is relevant because there is no distance threshold.</li>
+</ul>
+<h1 id="flow-2-grounded-rag-answer">Flow 2 — Grounded RAG Answer</h1>
+<h2 id="purpose-2">Purpose</h2>
+<p>Answer a question using retrieved evidence and citations. This is the former standalone RAG workflow, now available as an AI Assistant tool.</p>
+<pre><code class="language-text">POST /ask
+      ↓
+api.ask()
+      ↓
+assistant.run_assistant()
+      ↓
+Qwen3 selects grounded_answer
+      ↓
+rag.answer_question()
+      ↓
+semantic_search() → evidence chunks
+      ↓
+build_context() + build_prompt()
+      ↓
+Qwen3 writes cited answer
+      ↓
+assistant returns that answer directly
+</code></pre>
+<p>This normally requires two Qwen3 calls:</p>
+<ol>
+<li>The assistant-routing call selects <code>grounded_answer</code>.</li>
+<li>The RAG-generation call writes the evidence-based answer.</li>
+</ol>
+<p>There is no third formatting call because <code>run_assistant()</code> recognizes that RAG already produced the final answer.</p>
+<h2 id="files-and-functions-2">Files and functions</h2>
+<h3 id="source-api-py-2"><code>source/api.py</code></h3>
+<p><code>AskRequest</code> validates the JSON body:</p>
+<pre><code class="language-json">{&quot;question&quot;: &quot;Which AWS service can migrate databases?&quot;}
+</code></pre>
+<p><code>ask()</code> rejects whitespace-only questions, calls <code>run_assistant()</code>, and returns:</p>
+<pre><code class="language-json">{
+  &quot;question&quot;: &quot;Which AWS service can migrate databases?&quot;,
+  &quot;answer&quot;: &quot;AWS DMS can migrate databases. [SOURCE 1]&quot;
+}
+</code></pre>
+<h3 id="source-assistant-py"><code>source/assistant.py</code></h3>
+<p><code>run_assistant()</code> sends the user message, system prompt, and three tool definitions to Qwen3. For a document-content question, the prompt requires <code>grounded_answer()</code>.</p>
+<p><code>grounded_answer(question, k)</code> is a small adapter. It calls <code>rag.answer_question()</code> and returns its final answer text.</p>
+<h3 id="source-rag-py"><code>source/rag.py</code></h3>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>build_context()</code></td>
+<td>Converts ranked chunks into <code>[SOURCE 1]</code>, <code>[SOURCE 2]</code>, and similar evidence blocks.</td>
+</tr>
+<tr>
+<td><code>build_prompt()</code></td>
+<td>Adds grounding, refusal, and citation rules around the evidence and question.</td>
+</tr>
+<tr>
+<td><code>source_metadata()</code></td>
+<td>Creates citation records from retrieved chunks.</td>
+</tr>
+<tr>
+<td><code>answer_question()</code></td>
+<td>Coordinates retrieval, refusal, generation, source metadata, and failure handling.</td>
+</tr>
+</tbody>
+</table>
+<p>The context sent to Qwen3 resembles:</p>
+<pre><code class="language-text">[SOURCE 1]
+Document: test_doc2.txt
+Chunk: 0
+Content:
+AWS DMS stands for Database Migration Service...
+</code></pre>
+<p><code>answer_question()</code> returns a richer internal dictionary containing the answer, source metadata, and complete retrieved chunks. <code>grounded_answer()</code> exposes only the final answer string to the outer assistant.</p>
+<h2 id="empty-evidence-and-model-failure">Empty evidence and model failure</h2>
+<p>If semantic search returns nothing, RAG returns:</p>
+<pre><code class="language-text">I don't know based on the provided documents.
+</code></pre>
+<p>It does not call Qwen3 in that case.</p>
+<p>If Ollama fails after retrieval succeeds, RAG returns an unavailable-model message while retaining source information in its internal response.</p>
+<h2 id="what-grounding-does-and-does-not-guarantee">What grounding does and does not guarantee</h2>
+<p>The prompt instructs Qwen3 to use only the supplied evidence and cite it. A language model can still disobey instructions or make a mistake. That is why <code>source/evaluation.py</code> checks expected facts, refusals, and citation numbers.</p>
+<h1 id="flow-3-list-documents">Flow 3 — List Documents</h1>
+<h2 id="purpose-3">Purpose</h2>
+<p>Answer questions such as “What documents are available?” without semantic search or RAG.</p>
+<pre><code class="language-text">POST /ask
+      ↓
+api.ask()
+      ↓
+assistant.run_assistant()
+      ↓
+Qwen3 selects list_documents
+      ↓
+knowledge.load_documents()
+      ↓
+filenames return to Qwen3
+      ↓
+Qwen3 presents the list
+</code></pre>
+<h2 id="files-and-functions-3">Files and functions</h2>
+<h3 id="source-assistant-py-2"><code>source/assistant.py</code></h3>
+<p><code>list_documents()</code> calls <code>load_documents()</code>, selects each <code>source</code> filename, and serializes the list as JSON text. Tool messages must contain text, so JSON is a convenient structured representation.</p>
+<p><code>run_assistant()</code> appends that tool result to the conversation and asks Qwen3 to produce the user-facing response.</p>
+<h3 id="source-knowledge-py-2"><code>source/knowledge.py</code></h3>
+<p><code>load_documents()</code> reads current files directly from <code>documents/</code>. Therefore, newly added filenames can appear in this flow before they are indexed in Chroma.</p>
+<h2 id="what-this-flow-does-not-call-2">What this flow does not call</h2>
+<ul>
+<li>It does not create embeddings.</li>
+<li>It does not search Chroma.</li>
+<li>It does not run the RAG prompt.</li>
+<li>Qwen3 is still used to choose the tool and phrase the final response.</li>
+</ul>
+<h1 id="flow-4-read-a-document">Flow 4 — Read a Document</h1>
+<h2 id="purpose-4">Purpose</h2>
+<p>Return one complete document when the user supplies its exact filename.</p>
+<pre><code class="language-text">POST /ask
+      ↓
+api.ask()
+      ↓
+assistant.run_assistant()
+      ↓
+Qwen3 selects read_document(name)
+      ↓
+knowledge.load_documents()
+      ↓
+exact filename match
+      ↓
+complete text returns to Qwen3
+      ↓
+Qwen3 responds to the user
+</code></pre>
+<h2 id="files-and-functions-4">Files and functions</h2>
+<h3 id="source-assistant-py-3"><code>source/assistant.py</code></h3>
+<p><code>read_document()</code> receives <code>name</code> and:</p>
+<ol>
+<li>Rejects an empty filename.</li>
+<li>Loads current document records.</li>
+<li>Compares each <code>source</code> with <code>name</code> using exact equality.</li>
+<li>Returns the complete text on a match.</li>
+<li>Returns a clear “not found” message otherwise.</li>
+</ol>
+<p><code>run_assistant()</code> executes the function with arguments selected by Qwen3:</p>
+<pre><code class="language-python">function(**call.function.arguments)
+</code></pre>
+<p>If the arguments are <code>{&quot;name&quot;: &quot;test_doc2.txt&quot;}</code>, this is equivalent to:</p>
+<pre><code class="language-python">read_document(name=&quot;test_doc2.txt&quot;)
+</code></pre>
+<h3 id="source-knowledge-py-3"><code>source/knowledge.py</code></h3>
+<p><code>load_documents()</code> supplies the complete text. This flow reads from disk and does not reconstruct the document from indexed chunks.</p>
+<h2 id="what-this-flow-does-not-call-3">What this flow does not call</h2>
+<ul>
+<li>It does not require the Chroma index.</li>
+<li>It does not create or compare embeddings.</li>
+<li>It does not use the RAG prompt unless the assistant later selects the RAG tool in another step.</li>
+</ul>
+<h1 id="8-how-the-ai-assistant-chooses-among-three-tools">8. How the AI Assistant Chooses Among Three Tools</h1>
+<p><code>assistant.py</code> provides actual Python function objects to Ollama:</p>
+<pre><code class="language-python">TOOLS = [grounded_answer, list_documents, read_document]
+</code></pre>
+<p>The Ollama SDK derives tool schemas from function names, type annotations, and docstrings. The model may respond with a structured request such as:</p>
+<pre><code class="language-json">{
+  &quot;name&quot;: &quot;read_document&quot;,
+  &quot;arguments&quot;: {&quot;name&quot;: &quot;test_doc2.txt&quot;}
+}
+</code></pre>
+<p>Python controls execution through an allowlist:</p>
+<pre><code class="language-python">TOOL_MAP = {tool.__name__: tool for tool in TOOLS}
+</code></pre>
+<p>The model cannot execute an arbitrary function name through this lookup. Unknown names return explanatory text.</p>
+<p>The loop allows several tool rounds. Tool failures become tool-result text, allowing the model to recover. If no final answer appears after five rounds, the function returns a step-limit message.</p>
+<p>The system prompt allows direct answers only for explaining Fetchdex itself. Document-content questions are instructed to use <code>grounded_answer</code>. This is strong guidance, although model instructions are not a mathematical guarantee.</p>
+<h1 id="9-api-and-server-roles">9. API and Server Roles</h1>
+<p>Run:</p>
+<pre><code class="language-bash">python -m uvicorn source.api:app --reload
+</code></pre>
+<pre><code class="language-text">HTTP client
+    ↓
+Uvicorn server
+    ↓
+FastAPI validation and routing
+    ↓
+source/api.py endpoint
+    ↓
+application functions
+    ↓
+FastAPI converts returned dictionaries to JSON
+</code></pre>
+<pre><code class="language-text">FastAPI = application framework
+Uvicorn = process that listens for HTTP requests
+Pydantic = validates POST body fields
+</code></pre>
+<p>The API intentionally exposes only two functional workflows:</p>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Workflow</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /search</code></td>
+<td>Semantic Search</td>
+</tr>
+<tr>
+<td><code>POST /ask</code></td>
+<td>AI Assistant, which selects one of three tools</td>
+</tr>
+</tbody>
+</table>
+<p><code>GET /health</code> is operational status, not a user workflow.</p>
+<p>The functions in <code>source/api.py</code> are:</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AskRequest</code></td>
+<td>Defines and validates the <code>POST /ask</code> request body.</td>
+</tr>
+<tr>
+<td><code>search()</code></td>
+<td>Runs semantic search and translates failures into HTTP errors.</td>
+</tr>
+<tr>
+<td><code>ask()</code></td>
+<td>Runs the AI Assistant and returns its final answer.</td>
+</tr>
+<tr>
+<td><code>health()</code></td>
+<td>Returns the lightweight <code>{&quot;status&quot;: &quot;ok&quot;}</code> liveness response.</td>
+</tr>
+</tbody>
+</table>
+<h1 id="10-evaluation">10. Evaluation</h1>
+<p>The job-oriented project keeps retrieval and generated-answer evaluation even though RAG is no longer a separate user option.</p>
+<h3 id="file-source-evaluation-py">File: <code>source/evaluation.py</code></h3>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>load_dataset()</code></td>
+<td>Reads golden questions and expected outcomes.</td>
+</tr>
+<tr>
+<td><code>evaluate_retrieval()</code></td>
+<td>Checks Hit@1, Hit@K, and reciprocal rank for one case.</td>
+</tr>
+<tr>
+<td><code>evaluate_rag()</code></td>
+<td>Checks expected terms, refusal behavior, and citation-number behavior.</td>
+</tr>
+<tr>
+<td><code>run_evaluation()</code></td>
+<td>Runs the requested evaluator across applicable cases.</td>
+</tr>
+<tr>
+<td><code>main()</code></td>
+<td>Parses <code>retrieval</code> or <code>rag</code> and prints JSON.</td>
+</tr>
+</tbody>
+</table>
+<p>Run:</p>
+<pre><code class="language-bash">python -m source.evaluation retrieval
+python -m source.evaluation rag
+</code></pre>
+<p>The golden dataset filenames now match the supplied files:</p>
+<pre><code class="language-text">test_doc1.txt → FastAPI facts
+test_doc2.txt → AWS facts
+</code></pre>
+<p>The evaluation is deterministic in how it scores text, but generated answers can vary. Expected-term checks are intentionally simple: a semantically correct synonym can fail if it omits the expected substring.</p>
+<h1 id="11-complete-function-map">11. Complete Function Map</h1>
+<h2 id="source-knowledge-py-4"><code>source/knowledge.py</code></h2>
+<pre><code class="language-text">load_documents
+  ├── used by indexing
+  ├── used by list_documents
+  └── used by read_document
+
+chunk_text
+  └── chunk_documents
+        └── index_documents
+
+get_embedding_model ─┐
+get_collection ──────┼── semantic_search
+                     └── index_documents
+</code></pre>
+<h2 id="source-rag-py-2"><code>source/rag.py</code></h2>
+<pre><code class="language-text">semantic_search
+      ↓
+answer_question
+      ├── build_context
+      ├── build_prompt
+      └── source_metadata
+</code></pre>
+<h2 id="source-assistant-py-4"><code>source/assistant.py</code></h2>
+<pre><code class="language-text">run_assistant
+      ├── grounded_answer → rag.answer_question
+      ├── list_documents → knowledge.load_documents
+      └── read_document  → knowledge.load_documents
+</code></pre>
+<h2 id="source-api-py-3"><code>source/api.py</code></h2>
+<pre><code class="language-text">search → knowledge.semantic_search
+ask    → assistant.run_assistant
+health → static liveness dictionary
+</code></pre>
+<h2 id="source-evaluation-py"><code>source/evaluation.py</code></h2>
+<pre><code class="language-text">load_dataset
+      ├── run_evaluation(retrieval) → evaluate_retrieval
+      └── run_evaluation(rag)       → evaluate_rag
+</code></pre>
+<h1 id="12-commands">12. Commands</h1>
+<p>From the project root:</p>
+<pre><code class="language-bash">python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+ollama pull qwen3:1.7b
+python -m source.knowledge preview
+python -m source.knowledge index
+python -m uvicorn source.api:app --reload
+</code></pre>
+<p>Direct assistant call:</p>
+<pre><code class="language-bash">python -m source.assistant &quot;What documents do I have?&quot;
+</code></pre>
+<p>HTTP examples:</p>
+<pre><code class="language-bash">curl --get http://127.0.0.1:8000/search \
+  --data-urlencode 'q=database migration' \
+  --data-urlencode 'k=3'
+</code></pre>
+<pre><code class="language-bash">curl http://127.0.0.1:8000/ask \
+  -H 'Content-Type: application/json' \
+  -d '{&quot;question&quot;:&quot;Which AWS service can migrate databases?&quot;}'
+</code></pre>
+<h1 id="13-final-mental-model">13. Final Mental Model</h1>
+<pre><code class="language-text">                         FETCHDEX
+
+documents/*.txt
+      │
+      ├── load → chunk → MiniLM → Chroma index
+      │                              │
+      │                              ▼
+      │                       Semantic Search
+      │                       raw matching chunks
+      │
+      └───────────────────────────────┐
+                                      ▼
+                                AI Assistant
+                   ┌──────────────────┼──────────────────┐
+                   ▼                  ▼                  ▼
+            Grounded RAG       List Documents      Read Document
+                   │                  │                  │
+            search + Qwen3       filenames          complete text
+            cited answer             │                  │
+                   └──────────────────┴──────────────────┘
+                                      │
+                                user response
+</code></pre>
+<p>The architecture is compact while still demonstrating embeddings, vector retrieval, RAG, citations, tool calling, agent orchestration, APIs, validation, error handling, and evaluation.</p>
+</main>
+</body>
+</html>

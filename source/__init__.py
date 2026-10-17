@@ -1,0 +1,1 @@
+"""Fetchdex application package."""

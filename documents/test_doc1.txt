@@ -1,0 +1,11 @@
+FastAPI is a Python web framework used for building APIs.
+
+FastAPI uses Pydantic for request and response data validation.
+
+Path parameters are values included directly inside the URL path.
+
+Query parameters are commonly used for filtering, searching, sorting, and pagination.
+
+HTTPX can be used by FastAPI applications to make HTTP requests to external services.
+
+Timeouts should be configured when calling external services so the application does not wait indefinitely.
