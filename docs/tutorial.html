@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Fetchdex: Semantic Search and Grounded RAG</title>
+  <title>Fetchdex: Command-Line Semantic Search and RAG</title>
   <style>
     :root { color-scheme: light dark; --accent:#4f7cff; --panel:#f4f6fa; --text:#182033; --muted:#5f6b80; }
     * { box-sizing:border-box; }
@@ -11,7 +11,6 @@
     main { max-width:900px; margin:auto; padding:48px 24px 80px; }
     h1 { font-size:2.35rem; line-height:1.15; margin:0 0 12px; }
     h2 { margin-top:46px; border-bottom:1px solid #d8deea; padding-bottom:8px; }
-    h3 { margin-top:30px; }
     p, li { max-width:76ch; }
     .lead { color:var(--muted); font-size:1.12rem; }
     code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
@@ -30,119 +29,88 @@
 <body>
 <main>
   <h1>Fetchdex: Semantic Search and Grounded RAG</h1>
-  <p class="lead">Fetchdex exposes two API workflows. Both use the same local Chroma document index.</p>
+  <p class="lead">Fetchdex provides two terminal commands backed by one local Chroma document index.</p>
 
-  <pre><code>documents/*.txt or *.md
+  <pre><code>client-provided .txt/.md file or folder
         ↓
-API startup indexes the documents
+index command synchronizes the documents
         ↓
-Chroma vector collection
-        ├── GET /search → matching text and source files
-        └── POST /ask   → Qwen answer and source files</code></pre>
+Chroma
+        ├── search → matching text and files
+        └── ask    → Qwen answer and sources</code></pre>
 
-  <h2>1. Project Structure</h2>
-  <pre><code>Fetchdex/
-├── source/
-│   ├── __init__.py
-│   ├── semantic.py
-│   ├── rag.py
-│   ├── api.py
-│   └── evaluation.py
-├── documents/
-├── evaluation/golden_dataset.json
-├── tests/test_workflows.py
-├── requirements.txt
-└── README.md</code></pre>
+  <h2>1. Files and Responsibilities</h2>
   <table>
     <tr><th>File</th><th>Responsibility</th></tr>
     <tr><td><code>semantic.py</code></td><td>Load, chunk, embed, index, and retrieve documents.</td></tr>
     <tr><td><code>rag.py</code></td><td>Turn retrieved evidence into a grounded Qwen answer.</td></tr>
-    <tr><td><code>api.py</code></td><td>Index at startup and expose <code>/search</code>, <code>/ask</code>, and <code>/health</code>.</td></tr>
+    <tr><td><code>cli.py</code></td><td>Run indexing, search, or RAG commands and display results.</td></tr>
     <tr><td><code>evaluation.py</code></td><td>Evaluate retrieval and RAG against the golden dataset.</td></tr>
   </table>
-  <p><code>assistant.py</code> is no longer needed. <code>/ask</code> always runs RAG directly.</p>
 
-  <h2>2. Startup Indexing</h2>
-  <pre class="flow"><code>api.lifespan()
-      ↓
-semantic.index_documents()
-      ↓
-load → chunk → embed → upsert → delete stale chunks</code></pre>
-  <p>Restart the API after adding, changing, or removing documents.</p>
+  <h2>2. Indexing</h2>
+  <pre class="flow"><code>python fetchdex index "/path/to/notes"
+        ↓
+cli.main()
+        ↓
+index_documents()
+        ↓
+load → chunk → embed → update Chroma</code></pre>
+  <p>Folder paths are scanned recursively for <code>.txt</code> and <code>.md</code> files. Re-index after changing those files. The new index replaces the previous document set; search and ask reuse it without needing the path.</p>
 
-  <h2>3. Flow One: Semantic Search</h2>
-  <pre><code>GET /search?query=database%20migration&amp;chunks=3</code></pre>
-  <pre class="flow"><code>api.search()
-      ↓
-semantic_search(query, chunks)
-      ↓
-embed query → retrieve closest chunks
-      ↓
-return text and source filenames</code></pre>
-  <pre><code>{
-  "query": "database migration",
-  "results": [
-    {
-      "text": "AWS DMS can migrate databases.",
-      "source": "test_doc2.txt"
-    }
-  ]
-}</code></pre>
-  <p>This flow does not call Qwen.</p>
+  <h2>3. Semantic Search</h2>
+  <pre><code>python fetchdex index "/path/to/notes"
+python fetchdex search "database migration" --chunks 3</code></pre>
+  <pre class="flow"><code>run_search()
+    ↓
+embed query → retrieve closest Chroma chunks
+    ↓
+print text and source filenames</code></pre>
+  <p>This workflow does not call Qwen.</p>
 
-  <h2>4. Flow Two: Grounded RAG</h2>
-  <pre><code>POST /ask
-Content-Type: application/json
+  <h2>4. Grounded RAG</h2>
+  <pre><code>python fetchdex ask "Which AWS service can migrate databases?" --chunks 3</code></pre>
+  <pre class="flow"><code>run_ask()
+    ↓
+rag_search() → semantic retrieval
+    ↓
+document evidence → Ollama / Qwen
+    ↓
+answer and source filenames</code></pre>
+  <pre><code>Answer:
+AWS DMS can migrate databases.
 
-{"question":"Which AWS service can migrate databases?"}</code></pre>
-  <pre class="flow"><code>api.ask()
-      ↓
-rag.answer_question()
-      ↓
-semantic_search()
-      ↓
-build numbered source context
-      ↓
-Ollama / Qwen
-      ↓
-return answer and unique source filenames</code></pre>
-  <pre><code>{
-  "query": "Which AWS service can migrate databases?",
-  "answer": "AWS DMS can migrate databases. [SOURCE 1]",
-  "sources": ["test_doc2.txt"]
-}</code></pre>
-
-  <h3>RAG helpers</h3>
-  <table>
-    <tr><th>Function</th><th>Purpose</th></tr>
-    <tr><td><code>build_context()</code></td><td>Formats retrieved chunks as numbered evidence blocks.</td></tr>
-    <tr><td><code>build_prompt()</code></td><td>Adds grounding, citation, and refusal instructions.</td></tr>
-    <tr><td><code>source_metadata()</code></td><td>Records each citation's filename and chunk number.</td></tr>
-    <tr><td><code>answer_question()</code></td><td>Runs retrieval and generation once.</td></tr>
-  </table>
+Sources:
+- test_doc2.txt</code></pre>
+  <p>The Sources section shows which file supplied the retrieved evidence.</p>
 
   <h2>5. Evaluation</h2>
   <pre><code>python -m source.evaluation retrieval
 python -m source.evaluation rag</code></pre>
-  <p>Retrieval mode checks expected source ranking. RAG mode checks expected facts, refusals, and citation numbers.</p>
 
-  <h2>6. Setup and Commands</h2>
+  <h2>6. Setup and Tests</h2>
   <pre><code>cd ~/Desktop/Fetchdex
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 ollama pull qwen3:1.7b
-python -m uvicorn source.api:app --reload</code></pre>
-  <h3>Semantic search</h3>
-  <pre><code>curl --get http://127.0.0.1:8000/search \
-  --data-urlencode 'query=database migration' \
-  --data-urlencode 'chunks=3'</code></pre>
-  <h3>Grounded RAG</h3>
-  <pre><code>curl http://127.0.0.1:8000/ask \
-  -H 'Content-Type: application/json' \
-  -d '{"question":"Which AWS service can migrate databases?"}'</code></pre>
-  <h3>Tests</h3>
+ollama serve</code></pre>
   <pre><code>python -m unittest discover -s tests -v</code></pre>
+
+  <h2>Final Mental Model</h2>
+  <pre><code>                  Terminal
+                     │
+          ┌──────────┴──────────┐
+          │                     │
+       search                  ask
+          │                     │
+          ▼                     ▼
+    semantic.py              rag.py
+          │                     │
+          └── Chroma evidence ──┘
+                                │
+                                ▼
+                          Ollama / Qwen</code></pre>
 </main>
 </body>
 </html>

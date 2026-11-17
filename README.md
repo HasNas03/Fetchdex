@@ -1,58 +1,59 @@
 # Fetchdex
 
-Fetchdex is an AI-based tool that uses your study notes as context so you can find and review what matters in seconds.
+Fetchdex searches your local `.txt` and `.md` notes from the terminal.
 
-The Fetchdex API exposes two features:
+- `search` returns relevant document passages without an LLM.
+- `ask` uses those passages to generate a grounded Qwen answer.
 
-1. **Semantic Search** returns matching document chunks and source filenames without using an LLM.
-2. **Grounded RAG** retrieves relevant chunks and gives them to Qwen to generate a cited answer.
-
-## Setup
-
-Run from this project directory:
+## First-time setup
 
 ```bash
-python3.12 -m venv .venv
+cd ~/Desktop/Fetchdex
+python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 ollama pull qwen3:1.7b
 ```
 
-Ollama must be running for `POST /ask`. Semantic search does not use Qwen3.
+## Use Fetchdex
 
-## Documents and indexing
+Starting from a newly opened terminal:
 
-Put `.txt` or `.md` files in `documents/`. Starting the API automatically loads,
-chunks, embeds, and synchronizes those documents with `data/chroma/`.
-Restart the API after changing the documents.
-
-## Run the API
+### 1. Enter the project and activate its environment
 
 ```bash
-python -m uvicorn source.api:app --reload
+cd ~/Desktop/Fetchdex
+source .venv/bin/activate
 ```
 
-Open <http://127.0.0.1:8000/docs>.
+### 2. Index a file or folder
 
-- `GET /search?query=...&chunks=3` runs non-generative semantic search.
-- `POST /ask` sends `{"question": "..."}` directly through the RAG pipeline.
-- `GET /health` returns a liveness response.
-
-## Evaluate retrieval and RAG
+Provide the path to one `.txt`/`.md` file or a folder containing them:
 
 ```bash
-python -m source.evaluation retrieval
-python -m source.evaluation rag
+python fetchdex index "/Users/yourname/Documents/notes"
 ```
 
-The evaluation dataset is `evaluation/golden_dataset.json`.
-
-## Tests
+Relative paths also work:
 
 ```bash
-python -m unittest discover -s tests -v
+python fetchdex index "documents"
 ```
 
-## Documentation
+Run `index` again only after adding, editing, or deleting files at that path.
 
-Open `docs/tutorial.html` in a browser for the two-flow walkthrough. The editable source is `docs/tutorial.md`.
+### 3.1. Semantic Search (without an LLM)
+
+```bash
+python fetchdex search "what is switch in Java" --chunks 3
+```
+
+### 3.2. RAG Search (Qwen)
+
+Run `ollama serve` in a separate terminal. Then run:
+
+```bash
+python fetchdex ask "what is switch in Java" --chunks 3
+```
+
+`--chunks` is optional and defaults to `3`.
