@@ -1,13 +1,12 @@
-"""Focused checks for the four documented workflows."""
+"""Focused checks for semantic search and grounded RAG."""
 
-import json
 import types
 import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from source import api, assistant, evaluation, rag, semantic
+from source import api, evaluation, rag, semantic
 
 
 SEARCH_RESULT = {
@@ -75,7 +74,7 @@ class WorkflowTests(unittest.TestCase):
             patch.object(rag, "semantic_search", return_value=[SEARCH_RESULT]),
             patch.object(rag, "chat", return_value=response),
         ):
-            result = rag.answer_question("Which service migrates databases?")
+            result = rag.rag_search("Which service migrates databases?")
         self.assertEqual(result["sources"][0]["citation"], "SOURCE 1")
         self.assertIn("[SOURCE 1]", result["answer"])
 
@@ -87,46 +86,11 @@ class WorkflowTests(unittest.TestCase):
             patch.object(rag, "semantic_search", return_value=[SEARCH_RESULT]),
             patch.object(rag, "chat", return_value=response),
         ):
-            result = rag.answer_question("Which service migrates databases?")
+            result = rag.rag_search("Which service migrates databases?")
         self.assertEqual(
             result["answer"],
             "The local language model returned an empty response.",
         )
-
-    def test_list_and_read_document_tools(self):
-        documents = [{"source": "notes.txt", "text": "Complete contents"}]
-        with patch.object(assistant, "load_documents", return_value=documents):
-            self.assertEqual(json.loads(assistant.list_documents()), ["notes.txt"])
-            self.assertEqual(assistant.read_document("notes.txt"), "Complete contents")
-            self.assertIn("not found", assistant.read_document("missing.txt"))
-
-    def test_assistant_returns_grounded_tool_answer_directly(self):
-        call = types.SimpleNamespace(
-            function=types.SimpleNamespace(
-                name="grounded_answer",
-                arguments={"question": "migration"},
-            )
-        )
-        tool_request = types.SimpleNamespace(
-            message=types.SimpleNamespace(content="", tool_calls=[call])
-        )
-        with (
-            patch.object(assistant, "chat", return_value=tool_request) as model,
-            patch.object(
-                assistant,
-                "grounded_answer",
-                return_value="AWS DMS. [SOURCE 1]",
-            ) as tool,
-        ):
-            original = assistant.TOOL_MAP["grounded_answer"]
-            assistant.TOOL_MAP["grounded_answer"] = assistant.grounded_answer
-            try:
-                answer = assistant.assistant_search("Which service migrates databases?")
-            finally:
-                assistant.TOOL_MAP["grounded_answer"] = original
-        tool.assert_called_once_with(question="migration")
-        model.assert_called_once()
-        self.assertEqual(answer, "AWS DMS. [SOURCE 1]")
 
     def test_api_exposes_two_workflows_and_health(self):
         with (
@@ -134,8 +98,14 @@ class WorkflowTests(unittest.TestCase):
             patch.object(api, "semantic_search", return_value=[SEARCH_RESULT]),
             patch.object(
                 api,
-                "assistant_search",
-                return_value="AWS DMS. [SOURCE 1]",
+                "rag_search",
+                return_value={
+                    "answer": "AWS DMS. [SOURCE 1]",
+                    "sources": [
+                        {"source": "test_doc2.txt"},
+                        {"source": "test_doc2.txt"},
+                    ],
+                },
             ),
             TestClient(api.app) as client,
         ):
@@ -157,7 +127,14 @@ class WorkflowTests(unittest.TestCase):
             )
             response = client.post("/ask", json={"question": "migration"})
             self.assertEqual(response.status_code, 200)
-            self.assertIn("SOURCE 1", response.json()["answer"])
+            self.assertEqual(
+                response.json(),
+                {
+                    "query": "migration",
+                    "answer": "AWS DMS. [SOURCE 1]",
+                    "sources": ["test_doc2.txt"],
+                },
+            )
             self.assertEqual(client.get("/health").json(), {"status": "ok"})
         index.assert_called_once_with()
 

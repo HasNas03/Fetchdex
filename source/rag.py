@@ -29,44 +29,20 @@ def build_context(results: list[dict]) -> str:
 def build_prompt(question: str, context: str) -> str:
     """combine the retrieved context and user question with grounding rules"""
     # tell the model to use only our documents, cite sources and refuse unsupported questions
-    return f"""You are a personal knowledge assistant.
-                Answer using only the provided context.
-                - Do not invent facts or use outside knowledge.
-                - If the context does not support an answer, say: "{REFUSAL}"
-                - Cite supporting evidence with [SOURCE X].
-                - Keep the answer concise.
-
+    return f"""
+You are a personal knowledge assistant. Answer using only the provided context. Do not invent facts or use outside knowledge.
+If the context does not support an answer, say: "{REFUSAL}". Cite supporting evidence(s) with [SOURCE X]. Keep the answer concise.
                 CONTEXT:
                 {context}
-
                 QUESTION:
                 {question}
-
                 ANSWER:
-            """
-
-# create a clean source list for the returned response
-def source_metadata(results: list[dict]) -> list[dict]:
-    """return citation details for every retrieved chunk"""
-    # create one source record for each search result
-    return [
-        {
-            # match the source number used in the prompt
-            "citation": f"SOURCE {number}",
-            # preserve the original filename and chunk number
-            "source": result["metadata"]["source"],
-            "chunk_number": result["metadata"]["chunk_number"],
-        }
-        # start numbering at 1 to match build_context
-        for number, result in enumerate(results, start=1)
-    ]
-
-# -----------------------------------------------------------------------------------------------------------------------------
+"""
 
 # (MAIN) grounded RAG function
-def answer_question(question: str, k: int = 3) -> dict:
+def rag_search(question: str, k: int = 3) -> dict:
     """retrieve relevant chunks and ask the local model to answer from them 
-       returns the answer together with its sources and retrieved chunks"""
+       returns the answer together with its sources"""
 
     # 1. retrieve the top-k document chunks related to the question
     results = semantic_search(question, k)
@@ -74,21 +50,24 @@ def answer_question(question: str, k: int = 3) -> dict:
     # 2. refuse immediately when the search found no evidence
     if not results:
         return {
-            "question": question,
             "answer": REFUSAL,
             "sources": [],
-            "retrieved_chunks": [],
         }
 
     # 3. prepare source information that will be returned with the answer
-    sources = source_metadata(results)
+    sources = [
+        {
+            # match the source number used in the prompt and preserve its filename
+            "citation": f"SOURCE {number}",
+            "source": result["metadata"]["source"],
+        }
+        for number, result in enumerate(results, start=1)
+    ]
 
     # 4. ask the local language model to answer (the retrieved evidence is context)
     try:
         response = chat(
-            # choose the ollama model
             model=MODEL_NAME,
-            # send one user message containing the rules, evidence and question
             messages=[
                 {
                     "role": "user",
@@ -96,24 +75,13 @@ def answer_question(question: str, k: int = 3) -> dict:
                     "content": build_prompt(question, build_context(results)),
                 }],)
 
-    # 5. return a useful error response if ollama or the model is unavailable
+    # 5. let the API return HTTP 503 if ollama or the model is unavailable
     except Exception as error:
-        return {
-            "question": question,
-            "answer": "The local language model is currently unavailable.",
-            "error": str(error),
-            "sources": sources,
-            "retrieved_chunks": results,
-        }
+        raise RuntimeError(f"Local language model unavailable: {error}") from error
 
     # 6. return the model's answer and the evidence used to create it
     return {
-        "question": question,
         # ollama stores the generated text in response.message.content
-        "answer": (
-            response.message.content
-            or "The local language model returned an empty response."
-        ),
+        "answer": (response.message.content or "The local language model returned an empty response."),
         "sources": sources,
-        "retrieved_chunks": results,
     }

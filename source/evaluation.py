@@ -10,7 +10,7 @@ import json
 import re
 from pathlib import Path
 from source.semantic import semantic_search
-from source.rag import REFUSAL, answer_question
+from source.rag import REFUSAL, rag_search
 
 DATASET_PATH = Path("evaluation/golden_dataset.json")
 
@@ -80,7 +80,7 @@ def evaluate_rag(case: dict, k: int = 3) -> dict:
     """
 
     # generate rag response for case question
-    response = answer_question(case["question"], k)
+    response = rag_search(case["question"], k)
 
     # extract answer text
     answer = response["answer"]

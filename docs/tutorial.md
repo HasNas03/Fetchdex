@@ -1,581 +1,177 @@
-# Fetchdex Simplified: Four Flows, Two Entry Points
+# Fetchdex: Semantic Search and Grounded RAG
 
-This tutorial explains the simplified Fetchdex project from the outside in. It follows the current code in this folder.
-
-Users see two entry points:
+Fetchdex has two API workflows. Both use the same local document index.
 
 ```text
-Fetchdex
-├── Semantic Search
-│   └── embeddings + Chroma
-└── AI Assistant
-    ├── grounded RAG answer
-    ├── list documents
-    └── read a document
+documents/*.txt or *.md
+        ↓
+API startup indexes the documents
+        ↓
+Chroma vector collection
+        ├── GET /search → matching text and source files
+        └── POST /ask   → Qwen answer and source files
 ```
 
-That produces four flows to understand:
-
-1. Semantic Search.
-2. Grounded RAG Answer.
-3. List Documents.
-4. Read a Document.
-
-The former standalone RAG option was not deleted. It became the AI Assistant's `grounded_answer` tool.
-
-## 1. Big Picture
-
-Fetchdex turns local text documents into searchable data and lets a local language model work with those documents.
+## 1. Project Structure
 
 ```text
-documents/*.txt
-      ↓
-load and split into chunks
-      ↓
-MiniLM embedding vectors
-      ↓
-Chroma database on disk
-      ↓
-semantic results or grounded AI answers
-```
-
-Two different models have different jobs:
-
-| Component | Responsibility |
-|---|---|
-| `all-MiniLM-L6-v2` | Convert passages and questions into vectors for similarity search. |
-| `qwen3:1.7b` | Select assistant tools and generate natural-language answers. |
-
-```text
-Embedding model != language model
-Chroma != Ollama
-FastAPI != Uvicorn
-Semantic search != RAG
-RAG != agent routing
-```
-
-The project does not train either model. It calls existing models locally.
-
-## 2. Project Structure
-
-```text
-Fetchdex-Simplified/
+Fetchdex/
 ├── source/
-│   ├── __init__.py      marks source as a Python package
-│   ├── semantic.py      documents, chunks, embeddings, Chroma, search
-│   ├── rag.py           retrieval-grounded generation and citations
-│   ├── assistant.py     tool definitions and agent loop
-│   ├── api.py           HTTP routes for search and assistant
-│   └── evaluation.py    retrieval and RAG checks
-├── documents/           input .txt files
+│   ├── __init__.py
+│   ├── semantic.py
+│   ├── rag.py
+│   ├── api.py
+│   └── evaluation.py
+├── documents/
 ├── evaluation/
 │   └── golden_dataset.json
-├── docs/
-│   ├── tutorial.md
-│   └── tutorial.html
 ├── tests/
 │   └── test_workflows.py
 ├── requirements.txt
 └── README.md
 ```
 
-There is no single file that executes everything. Each command starts at a different entry point:
-
-| Command or request | Entry point |
+| File | Responsibility |
 |---|---|
-| Start the API | `api.lifespan()` → `semantic.index_documents()` |
-| `GET /search` | `api.search()` |
-| `POST /ask` | `api.ask()` |
-| `python -m source.assistant "..."` | `assistant.main()` |
-| `python -m source.evaluation retrieval` | `evaluation.main()` |
+| `semantic.py` | Load, chunk, embed, index, and retrieve documents. |
+| `rag.py` | Turn retrieved evidence into a grounded Qwen answer. |
+| `api.py` | Index at startup and expose `/search`, `/ask`, and `/health`. |
+| `evaluation.py` | Evaluate retrieval and RAG against the golden dataset. |
 
-## 3. Preparation: Build the Search Index
+`assistant.py` is no longer needed. `/ask` always runs RAG directly.
 
-All four flows depend on the source documents. Semantic search and RAG also depend on the Chroma index.
+## 2. Startup Indexing
 
-Starting the API builds and synchronizes the index automatically. Restart the
-API after adding, changing, or removing documents.
-
-The indexing sequence is:
+Starting the API calls `index_documents()` once:
 
 ```text
-load_documents()
+api.lifespan()
       ↓
-chunk_documents()
+semantic.index_documents()
       ↓
-get_embedding_model()
+load documents
       ↓
-encode_document(...)
+create overlapping chunks
       ↓
-get_collection()
+create embeddings
       ↓
-collection.upsert(...)
+upsert current chunks into Chroma
+      ↓
+delete stale chunks
 ```
 
-### File: `source/semantic.py`
+Restart the API after adding, changing, or removing documents.
 
-This file owns the complete knowledge-base lifecycle.
+## 3. Flow One: Semantic Search
 
-| Function | What it does |
-|---|---|
-| `load_documents()` | Reads `.txt` files and returns filename/text dictionaries. |
-| `chunk_text()` | Splits one string into overlapping 40-word windows with 10-word overlap. |
-| `chunk_documents()` | Applies chunking to every document and adds source metadata. |
-| `get_embedding_model()` | Lazily loads MiniLM once per Python process. |
-| `get_collection()` | Lazily opens the persistent Chroma collection once per process. |
-| `index_documents()` | Coordinates chunking, embedding, and Chroma upsert. |
-| `semantic_search()` | Embeds a question and returns nearest stored chunks. |
-| `preview_documents()` | Prints chunks without writing the database. |
-| `main()` | Selects `preview` or `index` from the command line. |
+Request:
 
-`@lru_cache(maxsize=1)` is important. The first call creates the model or collection object. Later calls in that process reuse it.
-
-Chunk overlap preserves context at boundaries:
-
-```text
-chunk 0: words  0–39
-chunk 1: words 30–69
-chunk 2: words 60–99
+```http
+GET /search?query=database%20migration&chunks=3
 ```
 
-`upsert` inserts a new chunk ID or updates an existing one. It does not automatically delete stale IDs left by removed or shortened documents.
-
-# Flow 1 — Semantic Search
-
-## Purpose
-
-Return relevant document passages without asking Qwen3 to produce an answer.
+Flow:
 
 ```text
-GET /search?query=database+migration&chunks=3
-      ↓
 api.search()
       ↓
-semantic.semantic_search()
+semantic_search(query, chunks)
       ↓
-MiniLM encodes the question
+embed the query
       ↓
-Chroma compares it with stored chunk vectors
+retrieve the closest Chroma chunks
       ↓
-raw matching chunks + filenames + distances
+return text and source filenames
 ```
 
-## Files and functions
-
-### `source/api.py`
-
-`search()` is the HTTP boundary. FastAPI validates:
-
-- `q`: required text, 1–1000 characters.
-- `k`: integer from 1–10, default 3.
-
-It converts application errors into HTTP responses:
-
-| Failure | HTTP status |
-|---|---:|
-| Invalid direct search input | 400 |
-| Embedding/database search failure | 503 |
-| Unexpected failure | 500 |
-
-### `source/semantic.py`
-
-`semantic_search(query, k)` performs the actual workflow:
-
-1. Reject blank queries and `k < 1`.
-2. Open the cached Chroma collection.
-3. Return `[]` if the collection is empty.
-4. Encode the question with `encode_query()`.
-5. Ask Chroma for the nearest vectors.
-6. Convert Chroma's batched response into ordinary dictionaries.
-
-The result looks like:
+Example response:
 
 ```json
 {
   "query": "database migration",
   "results": [
     {
-      "chunk_id": "test_doc2.txt-0",
-      "text": "AWS DMS stands for Database Migration Service...",
-      "metadata": {
-        "source": "test_doc2.txt",
-        "chunk_number": 0
-      },
-      "distance": 0.18
+      "text": "AWS DMS can migrate databases.",
+      "source": "test_doc2.txt"
     }
   ]
 }
 ```
 
-The distance above is illustrative. With cosine distance, a lower value means a closer match.
+This flow does not call Qwen.
 
-## What this flow does not call
+## 4. Flow Two: Grounded RAG
 
-- It does not call Ollama.
-- It does not load Qwen3.
-- It does not generate an answer.
-- It does not guarantee that a result is relevant because there is no distance threshold.
+Request:
 
-# Flow 2 — Grounded RAG Answer
-
-## Purpose
-
-Answer a question using retrieved evidence and citations. This is the former standalone RAG workflow, now available as an AI Assistant tool.
-
-```text
+```http
 POST /ask
-      ↓
-api.ask()
-      ↓
-assistant.assistant_search()
-      ↓
-Qwen3 selects grounded_answer
-      ↓
-rag.answer_question()
-      ↓
-semantic_search() → evidence chunks
-      ↓
-build_context() + build_prompt()
-      ↓
-Qwen3 writes cited answer
-      ↓
-assistant returns that answer directly
+Content-Type: application/json
 ```
-
-This normally requires two Qwen3 calls:
-
-1. The assistant-routing call selects `grounded_answer`.
-2. The RAG-generation call writes the evidence-based answer.
-
-There is no third formatting call because `assistant_search()` recognizes that RAG already produced the final answer.
-
-## Files and functions
-
-### `source/api.py`
-
-`AskRequest` validates the JSON body:
-
-```json
-{"question": "Which AWS service can migrate databases?"}
-```
-
-`ask()` rejects whitespace-only questions, calls `assistant_search()`, and returns:
 
 ```json
 {
-  "question": "Which AWS service can migrate databases?",
-  "answer": "AWS DMS can migrate databases. [SOURCE 1]"
+  "question": "Which AWS service can migrate databases?"
 }
 ```
 
-### `source/assistant.py`
-
-`assistant_search()` sends the user message, system prompt, and three tool definitions to Qwen3. For a document-content question, the prompt requires `grounded_answer()`.
-
-`grounded_answer(question, k)` is a small adapter. It calls `rag.answer_question()` and returns its final answer text.
-
-### `source/rag.py`
-
-| Function | What it does |
-|---|---|
-| `build_context()` | Converts ranked chunks into `[SOURCE 1]`, `[SOURCE 2]`, and similar evidence blocks. |
-| `build_prompt()` | Adds grounding, refusal, and citation rules around the evidence and question. |
-| `source_metadata()` | Creates citation records from retrieved chunks. |
-| `answer_question()` | Coordinates retrieval, refusal, generation, source metadata, and failure handling. |
-
-The context sent to Qwen3 resembles:
+Flow:
 
 ```text
-[SOURCE 1]
-Document: test_doc2.txt
-Chunk: 0
-Content:
-AWS DMS stands for Database Migration Service...
-```
-
-`answer_question()` returns a richer internal dictionary containing the answer, source metadata, and complete retrieved chunks. `grounded_answer()` exposes only the final answer string to the outer assistant.
-
-## Empty evidence and model failure
-
-If semantic search returns nothing, RAG returns:
-
-```text
-I don't know based on the provided documents.
-```
-
-It does not call Qwen3 in that case.
-
-If Ollama fails after retrieval succeeds, RAG returns an unavailable-model message while retaining source information in its internal response.
-
-## What grounding does and does not guarantee
-
-The prompt instructs Qwen3 to use only the supplied evidence and cite it. A language model can still disobey instructions or make a mistake. That is why `source/evaluation.py` checks expected facts, refusals, and citation numbers.
-
-# Flow 3 — List Documents
-
-## Purpose
-
-Answer questions such as “What documents are available?” without semantic search or RAG.
-
-```text
-POST /ask
-      ↓
 api.ask()
       ↓
-assistant.assistant_search()
+rag.rag_search()
       ↓
-Qwen3 selects list_documents
+semantic_search()
       ↓
-semantic.load_documents()
+build numbered source context
       ↓
-filenames return to Qwen3
+send evidence and question to Qwen through Ollama
       ↓
-Qwen3 presents the list
+return the answer and unique source filenames
 ```
 
-## Files and functions
-
-### `source/assistant.py`
-
-`list_documents()` calls `load_documents()`, selects each `source` filename, and serializes the list as JSON text. Tool messages must contain text, so JSON is a convenient structured representation.
-
-`assistant_search()` appends that tool result to the conversation and asks Qwen3 to produce the user-facing response.
-
-### `source/semantic.py`
-
-`load_documents()` reads current files directly from `documents/`. Therefore, newly added filenames can appear in this flow before they are indexed in Chroma.
-
-## What this flow does not call
-
-- It does not create embeddings.
-- It does not search Chroma.
-- It does not run the RAG prompt.
-- Qwen3 is still used to choose the tool and phrase the final response.
-
-# Flow 4 — Read a Document
-
-## Purpose
-
-Return one complete document when the user supplies its exact filename.
-
-```text
-POST /ask
-      ↓
-api.ask()
-      ↓
-assistant.assistant_search()
-      ↓
-Qwen3 selects read_document(name)
-      ↓
-semantic.load_documents()
-      ↓
-exact filename match
-      ↓
-complete text returns to Qwen3
-      ↓
-Qwen3 responds to the user
-```
-
-## Files and functions
-
-### `source/assistant.py`
-
-`read_document()` receives `name` and:
-
-1. Rejects an empty filename.
-2. Loads current document records.
-3. Compares each `source` with `name` using exact equality.
-4. Returns the complete text on a match.
-5. Returns a clear “not found” message otherwise.
-
-`assistant_search()` executes the function with arguments selected by Qwen3:
-
-```python
-function(**call.function.arguments)
-```
-
-If the arguments are `{"name": "test_doc2.txt"}`, this is equivalent to:
-
-```python
-read_document(name="test_doc2.txt")
-```
-
-### `source/semantic.py`
-
-`load_documents()` supplies the complete text. This flow reads from disk and does not reconstruct the document from indexed chunks.
-
-## What this flow does not call
-
-- It does not require the Chroma index.
-- It does not create or compare embeddings.
-- It does not use the RAG prompt unless the assistant later selects the RAG tool in another step.
-
-# 8. How the AI Assistant Chooses Among Three Tools
-
-`assistant.py` provides actual Python function objects to Ollama:
-
-```python
-TOOLS = [grounded_answer, list_documents, read_document]
-```
-
-The Ollama SDK derives tool schemas from function names, type annotations, and docstrings. The model may respond with a structured request such as:
+Example response:
 
 ```json
 {
-  "name": "read_document",
-  "arguments": {"name": "test_doc2.txt"}
+  "query": "Which AWS service can migrate databases?",
+  "answer": "AWS DMS can migrate databases. [SOURCE 1]",
+  "sources": ["test_doc2.txt"]
 }
 ```
 
-Python controls execution through an allowlist:
+### RAG helpers
 
-```python
-TOOL_MAP = {tool.__name__: tool for tool in TOOLS}
-```
+| Function | Purpose |
+|---|---|
+| `build_context()` | Formats retrieved chunks as numbered evidence blocks. |
+| `build_prompt()` | Adds grounding, citation, and refusal instructions. |
+| Source list inside `rag_search()` | Numbers each citation and records its filename. |
+| `rag_search()` | Runs retrieval and generation once. |
 
-The model cannot execute an arbitrary function name through this lookup. Unknown names return explanatory text.
+If search finds no evidence, RAG returns the standard refusal. If Ollama is unavailable, `rag.py` raises `RuntimeError` and the API returns HTTP 503.
 
-The loop allows several tool rounds. Tool failures become tool-result text, allowing the model to recover. If no final answer appears after five rounds, the function returns a step-limit message.
+## 5. Evaluation
 
-The system prompt allows direct answers only for explaining Fetchdex itself. Document-content questions are instructed to use `grounded_answer`. This is strong guidance, although model instructions are not a mathematical guarantee.
-
-# 9. API and Server Roles
-
-Run:
-
-```bash
-python -m uvicorn source.api:app --reload
-```
+`evaluation.py` evaluates the two workflows separately:
 
 ```text
-HTTP client
-    ↓
-Uvicorn server
-    ↓
-FastAPI validation and routing
-    ↓
-source/api.py endpoint
-    ↓
-application functions
-    ↓
-FastAPI converts returned dictionaries to JSON
+retrieval mode → expected source ranking
+rag mode       → expected facts, refusals, and citation numbers
 ```
 
-```text
-FastAPI = application framework
-Uvicorn = process that listens for HTTP requests
-Pydantic = validates POST body fields
-```
-
-The API intentionally exposes only two functional workflows:
-
-| Route | Workflow |
-|---|---|
-| `GET /search` | Semantic Search |
-| `POST /ask` | AI Assistant, which selects one of three tools |
-
-`GET /health` is operational status, not a user workflow.
-
-The functions in `source/api.py` are:
-
-| Function | What it does |
-|---|---|
-| `AskRequest` | Defines and validates the `POST /ask` request body. |
-| `search()` | Runs semantic search and translates failures into HTTP errors. |
-| `ask()` | Runs the AI Assistant and returns its final answer. |
-| `health()` | Returns the lightweight `{"status": "ok"}` liveness response. |
-
-# 10. Evaluation
-
-The job-oriented project keeps retrieval and generated-answer evaluation even though RAG is no longer a separate user option.
-
-### File: `source/evaluation.py`
-
-| Function | What it does |
-|---|---|
-| `load_dataset()` | Reads golden questions and expected outcomes. |
-| `evaluate_retrieval()` | Checks Hit@1, Hit@K, and reciprocal rank for one case. |
-| `evaluate_rag()` | Checks expected terms, refusal behavior, and citation-number behavior. |
-| `run_evaluation()` | Runs the requested evaluator across applicable cases. |
-| `main()` | Parses `retrieval` or `rag` and prints JSON. |
-
-Run:
+Commands:
 
 ```bash
 python -m source.evaluation retrieval
 python -m source.evaluation rag
 ```
 
-The golden dataset filenames now match the supplied files:
-
-```text
-test_doc1.txt → FastAPI facts
-test_doc2.txt → AWS facts
-```
-
-The evaluation is deterministic in how it scores text, but generated answers can vary. Expected-term checks are intentionally simple: a semantically correct synonym can fail if it omits the expected substring.
-
-# 11. Complete Function Map
-
-## `source/semantic.py`
-
-```text
-load_documents
-  ├── used by indexing
-  ├── used by list_documents
-  └── used by read_document
-
-chunk_text
-  └── chunk_documents
-        └── index_documents
-
-get_embedding_model ─┐
-get_collection ──────┼── semantic_search
-                     └── index_documents
-```
-
-## `source/rag.py`
-
-```text
-semantic_search
-      ↓
-answer_question
-      ├── build_context
-      ├── build_prompt
-      └── source_metadata
-```
-
-## `source/assistant.py`
-
-```text
-assistant_search
-      ├── grounded_answer → rag.answer_question
-      ├── list_documents → semantic.load_documents
-      └── read_document  → semantic.load_documents
-```
-
-## `source/api.py`
-
-```text
-lifespan → semantic.index_documents
-search → semantic.semantic_search
-ask    → assistant.assistant_search
-health → static liveness dictionary
-```
-
-## `source/evaluation.py`
-
-```text
-load_dataset
-      ├── run_evaluation(retrieval) → evaluate_retrieval
-      └── run_evaluation(rag)       → evaluate_rag
-```
-
-# 12. Commands
-
-From the project root:
+## 6. Setup and Commands
 
 ```bash
+cd ~/Desktop/Fetchdex
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
@@ -583,13 +179,7 @@ ollama pull qwen3:1.7b
 python -m uvicorn source.api:app --reload
 ```
 
-Direct assistant call:
-
-```bash
-python -m source.assistant "What documents do I have?"
-```
-
-HTTP examples:
+Semantic search:
 
 ```bash
 curl --get http://127.0.0.1:8000/search \
@@ -597,37 +187,37 @@ curl --get http://127.0.0.1:8000/search \
   --data-urlencode 'chunks=3'
 ```
 
+Grounded RAG:
+
 ```bash
 curl http://127.0.0.1:8000/ask \
   -H 'Content-Type: application/json' \
   -d '{"question":"Which AWS service can migrate databases?"}'
 ```
 
-# 13. Final Mental Model
+Tests:
 
-```text
-                         FETCHDEX
-
-documents/*.txt
-      │
-      ├── load → chunk → MiniLM → Chroma index
-      │                              │
-      │                              ▼
-      │                       Semantic Search
-      │                       raw matching chunks
-      │
-      └───────────────────────────────┐
-                                      ▼
-                                AI Assistant
-                   ┌──────────────────┼──────────────────┐
-                   ▼                  ▼                  ▼
-            Grounded RAG       List Documents      Read Document
-                   │                  │                  │
-            search + Qwen3       filenames          complete text
-            cited answer             │                  │
-                   └──────────────────┴──────────────────┘
-                                      │
-                                user response
+```bash
+python -m unittest discover -s tests -v
 ```
 
-The architecture is compact while still demonstrating embeddings, vector retrieval, RAG, citations, tool calling, agent orchestration, APIs, validation, error handling, and evaluation.
+## Final Mental Model
+
+```text
+                    Fetchdex API
+                         │
+            ┌────────────┴────────────┐
+            │                         │
+      GET /search                 POST /ask
+            │                         │
+            ▼                         ▼
+      semantic.py               rag.py
+            │                         │
+            └──── Chroma evidence ────┘
+                                      │
+                                      ▼
+                                Ollama / Qwen
+                                      │
+                                      ▼
+                              Answer + sources
+```
