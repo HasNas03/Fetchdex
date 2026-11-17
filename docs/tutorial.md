@@ -1,15 +1,15 @@
 # Fetchdex: Semantic Search and Grounded RAG
 
-Fetchdex has two API workflows. Both use the same local document index.
+Fetchdex has two command-line workflows. Both use the same local document index.
 
 ```text
-documents/*.txt or *.md
+client-provided .txt/.md file or folder
         ↓
-API startup indexes the documents
+index command synchronizes the documents
         ↓
 Chroma vector collection
-        ├── GET /search → matching text and source files
-        └── POST /ask   → Qwen answer and source files
+        ├── search → matching text and source files
+        └── ask    → Qwen answer and source files
 ```
 
 ## 1. Project Structure
@@ -20,9 +20,8 @@ Fetchdex/
 │   ├── __init__.py
 │   ├── semantic.py
 │   ├── rag.py
-│   ├── api.py
+│   ├── cli.py
 │   └── evaluation.py
-├── documents/
 ├── evaluation/
 │   └── golden_dataset.json
 ├── tests/
@@ -35,138 +34,95 @@ Fetchdex/
 |---|---|
 | `semantic.py` | Load, chunk, embed, index, and retrieve documents. |
 | `rag.py` | Turn retrieved evidence into a grounded Qwen answer. |
-| `api.py` | Index at startup and expose `/search`, `/ask`, and `/health`. |
+| `cli.py` | Run indexing, search, or RAG commands and display results. |
 | `evaluation.py` | Evaluate retrieval and RAG against the golden dataset. |
 
-`assistant.py` is no longer needed. `/ask` always runs RAG directly.
+## 2. Indexing
 
-## 2. Startup Indexing
-
-Starting the API calls `index_documents()` once:
+Provide a file or folder path when building the index:
 
 ```text
-api.lifespan()
-      ↓
+python fetchdex index "/path/to/notes"
+        ↓
+cli.main()
+        ↓
 semantic.index_documents()
-      ↓
-load documents
-      ↓
-create overlapping chunks
-      ↓
-create embeddings
-      ↓
-upsert current chunks into Chroma
-      ↓
-delete stale chunks
+        ↓
+load → chunk → embed → update Chroma → delete stale chunks
 ```
 
-Restart the API after adding, changing, or removing documents.
+Folder paths are scanned recursively for `.txt` and `.md` files. Run `index`
+again after changing files at that path. The new index replaces the previously
+indexed document set. `search` and `ask` reuse it without needing the path.
 
 ## 3. Flow One: Semantic Search
 
-Request:
-
-```http
-GET /search?query=database%20migration&chunks=3
+```bash
+python fetchdex index "/path/to/notes"
+python fetchdex search "database migration" --chunks 3
 ```
-
-Flow:
 
 ```text
-api.search()
-      ↓
+cli.run_search()
+        ↓
 semantic_search(query, chunks)
-      ↓
-embed the query
-      ↓
-retrieve the closest Chroma chunks
-      ↓
-return text and source filenames
+        ↓
+embed query → retrieve closest Chroma chunks
+        ↓
+print matching text and source filenames
 ```
 
-Example response:
-
-```json
-{
-  "query": "database migration",
-  "results": [
-    {
-      "text": "AWS DMS can migrate databases.",
-      "source": "test_doc2.txt"
-    }
-  ]
-}
-```
-
-This flow does not call Qwen.
+This workflow does not call Qwen.
 
 ## 4. Flow Two: Grounded RAG
 
-Request:
-
-```http
-POST /ask
-Content-Type: application/json
+```bash
+python fetchdex ask "Which AWS service can migrate databases?" --chunks 3
 ```
-
-```json
-{
-  "question": "Which AWS service can migrate databases?"
-}
-```
-
-Flow:
 
 ```text
-api.ask()
-      ↓
+cli.run_ask()
+        ↓
 rag.rag_search()
-      ↓
+        ↓
 semantic_search()
-      ↓
-build numbered source context
-      ↓
+        ↓
+build document evidence and grounding instructions
+        ↓
 send evidence and question to Qwen through Ollama
-      ↓
-return the answer and unique source filenames
+        ↓
+print answer and source filenames
 ```
 
-Example response:
+Example:
 
-```json
-{
-  "query": "Which AWS service can migrate databases?",
-  "answer": "AWS DMS can migrate databases. [SOURCE 1]",
-  "sources": ["test_doc2.txt"]
-}
+```text
+Answer:
+AWS DMS can migrate databases.
+
+Sources:
+- test_doc2.txt
 ```
+
+The `Sources` section shows which file supplied the retrieved evidence.
 
 ### RAG helpers
 
 | Function | Purpose |
 |---|---|
-| `build_context()` | Formats retrieved chunks as numbered evidence blocks. |
-| `build_prompt()` | Adds grounding, citation, and refusal instructions. |
-| Source list inside `rag_search()` | Numbers each citation and records its filename. |
-| `rag_search()` | Runs retrieval and generation once. |
-
-If search finds no evidence, RAG returns the standard refusal. If Ollama is unavailable, `rag.py` raises `RuntimeError` and the API returns HTTP 503.
+| `build_context()` | Formats retrieved chunks as document evidence blocks. |
+| `build_prompt()` | Adds grounding and refusal instructions. |
+| `rag_search()` | Retrieves evidence, calls Qwen, and returns answer and sources. |
 
 ## 5. Evaluation
-
-`evaluation.py` evaluates the two workflows separately:
-
-```text
-retrieval mode → expected source ranking
-rag mode       → expected facts, refusals, and citation numbers
-```
-
-Commands:
 
 ```bash
 python -m source.evaluation retrieval
 python -m source.evaluation rag
 ```
+
+- Retrieval mode checks whether expected files rank near the top.
+- RAG mode checks expected facts, refusal behavior, and source filenames.
 
 ## 6. Setup and Commands
 
@@ -176,23 +132,12 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 ollama pull qwen3:1.7b
-python -m uvicorn source.api:app --reload
 ```
 
-Semantic search:
+Ollama must be open or running before using `ask`:
 
 ```bash
-curl --get http://127.0.0.1:8000/search \
-  --data-urlencode 'query=database migration' \
-  --data-urlencode 'chunks=3'
-```
-
-Grounded RAG:
-
-```bash
-curl http://127.0.0.1:8000/ask \
-  -H 'Content-Type: application/json' \
-  -d '{"question":"Which AWS service can migrate databases?"}'
+ollama serve
 ```
 
 Tests:
@@ -204,20 +149,20 @@ python -m unittest discover -s tests -v
 ## Final Mental Model
 
 ```text
-                    Fetchdex API
-                         │
-            ┌────────────┴────────────┐
-            │                         │
-      GET /search                 POST /ask
-            │                         │
-            ▼                         ▼
-      semantic.py               rag.py
-            │                         │
-            └──── Chroma evidence ────┘
-                                      │
-                                      ▼
-                                Ollama / Qwen
-                                      │
-                                      ▼
-                              Answer + sources
+                         Terminal
+                            │
+               ┌────────────┴────────────┐
+               │                         │
+            search                      ask
+               │                         │
+               ▼                         ▼
+         semantic.py                  rag.py
+               │                         │
+               └──── Chroma evidence ────┘
+                                         │
+                                         ▼
+                                   Ollama / Qwen
+                                         │
+                                         ▼
+                                Answer + sources
 ```

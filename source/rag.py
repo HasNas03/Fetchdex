@@ -10,28 +10,23 @@ REFUSAL = "I don't know based on the provided documents"
 
 # format search results for the language model
 def build_context(results: list[dict]) -> str:
-    """convert retrieved chunks into numbered source blocks
-       the source numbers let the model cite evidence as [SOURCE X]"""
-    # format each result and join the source blocks with separators
+    """convert retrieved chunks into document evidence blocks"""
+    # include each chunk's filename and text, separated from the next chunk
     return "\n\n---\n\n".join(
         (
-            # number the source and include its filename, chunk number and text
-            f"[SOURCE {number}]\n"
             f"Document: {result['metadata']['source']}\n"
-            f"Chunk: {result['metadata']['chunk_number']}\n"
             f"Content:\n{result['text']}"
         )
-        # start numbering at 1 so citations are easy to read
-        for number, result in enumerate(results, start=1)
+        for result in results
     )
 
 # create the complete instructions sent to the language model
 def build_prompt(question: str, context: str) -> str:
     """combine the retrieved context and user question with grounding rules"""
-    # tell the model to use only our documents, cite sources and refuse unsupported questions
+    # tell the model to use only our documents and refuse unsupported questions
     return f"""
 You are a personal knowledge assistant. Answer using only the provided context. Do not invent facts or use outside knowledge.
-If the context does not support an answer, say: "{REFUSAL}". Cite supporting evidence(s) with [SOURCE X]. Keep the answer concise.
+If the context does not support an answer, say: "{REFUSAL}". Keep the answer concise. Do not add citations to the answer.
                 CONTEXT:
                 {context}
                 QUESTION:
@@ -54,15 +49,10 @@ def rag_search(question: str, k: int = 3) -> dict:
             "sources": [],
         }
 
-    # 3. prepare source information that will be returned with the answer
-    sources = [
-        {
-            # match the source number used in the prompt and preserve its filename
-            "citation": f"SOURCE {number}",
-            "source": result["metadata"]["source"],
-        }
-        for number, result in enumerate(results, start=1)
-    ]
+    # 3. preserve each filename once for the final source list
+    sources = list(dict.fromkeys(
+        result["metadata"]["source"] for result in results
+    ))
 
     # 4. ask the local language model to answer (the retrieved evidence is context)
     try:
@@ -71,17 +61,18 @@ def rag_search(question: str, k: int = 3) -> dict:
             messages=[
                 {
                     "role": "user",
-                    # build the numbered context first, then place it in the prompt
+                    # build the document context first, then place it in the prompt
                     "content": build_prompt(question, build_context(results)),
                 }],)
 
-    # 5. let the API return HTTP 503 if ollama or the model is unavailable
+    # 5. let the command-line program report if ollama or the model is unavailable
     except Exception as error:
         raise RuntimeError(f"Local language model unavailable: {error}") from error
 
-    # 6. return the model's answer and the evidence used to create it
+    # 6. return the model's answer and the filenames used to create it
+    answer = response.message.content or "The local language model returned an empty response."
     return {
-        # ollama stores the generated text in response.message.content
-        "answer": (response.message.content or "The local language model returned an empty response."),
-        "sources": sources,
+        "answer": answer,
+        # do not show unrelated retrieved files when the model refused to answer
+        "sources": [] if REFUSAL.lower() in answer.lower() else sources,
     }

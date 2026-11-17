@@ -5,7 +5,6 @@ from pathlib import Path
 import chromadb
 from sentence_transformers import SentenceTransformer
 
-DOCUMENTS_FOLDER = Path("documents")
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 CHROMA_PATH = "data/chroma"
 COLLECTION_NAME = "personal_knowledge"
@@ -79,26 +78,38 @@ def store_embeds(collection, embedded_chunks: list[dict]) -> None:
 
 # -----------------------------------------------------------------------------------------------------------------------------
 
-# load our source documents
-def load_documents() -> list[dict]:
-    """load every .txt and .md file from the documents folder"""
+# load source documents from a client-provided file or folder
+def load_documents(document_path: str | Path) -> list[dict]:
+    """load one text file or every text file inside a folder"""
+    path = Path(document_path).expanduser()
+    if not path.exists():
+        raise ValueError(f"Document path does not exist: {path}")
+
+    # accept one supported file or recursively scan a folder
+    if path.is_file():
+        if path.suffix.lower() not in {".txt", ".md"}:
+            raise ValueError("Document must be a .txt or .md file")
+        file_paths = [path]
+    else:
+        file_paths = sorted(
+            file_path
+            for file_path in path.rglob("*")
+            if file_path.is_file() and file_path.suffix.lower() in {".txt", ".md"}
+        )
+
+    if not file_paths:
+        raise ValueError(f"No .txt or .md files found in: {path}")
+
     # holds every loaded document
     documents = []
 
-    # find and process every supported document
-    file_paths = sorted([
-        *DOCUMENTS_FOLDER.glob("*.txt"),
-        *DOCUMENTS_FOLDER.glob("*.md"),
-    ])
+    # read each file and retain a unique, readable source path
     for file_path in file_paths:
-        # read entire file
         text = file_path.read_text(encoding="utf-8")
-        # store filename and contents
         document = {
-            "source": file_path.name,
+            "source": file_path.name if path.is_file() else str(file_path.relative_to(path)),
             "text": text,
         }
-        # add document to list
         documents.append(document)
 
     return documents
@@ -153,10 +164,10 @@ def embed_documents(model, chunks: list[dict]) -> list[dict]:
     return embedded_chunks
 
 # Startup - load, chunk, embed, and store data into collection
-def index_documents() -> int:
+def index_documents(document_path: str | Path) -> int:
     """load, chunk, embed and synchronize all documents with Chroma"""
     # 1. load all documents
-    documents = load_documents()
+    documents = load_documents(document_path)
     # 2. create chunks
     chunks = chunk_documents(documents)
 

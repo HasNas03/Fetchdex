@@ -7,7 +7,6 @@
 5. print evaluation report
 """
 import json
-import re
 from pathlib import Path
 from source.semantic import semantic_search
 from source.rag import REFUSAL, rag_search
@@ -76,7 +75,7 @@ def evaluate_retrieval(case: dict, k: int = 3) -> dict:
 # 3. evaluate rag answer
 def evaluate_rag(case: dict, k: int = 3) -> dict:
     """
-    check expected facts, refusal behavior and citation numbers
+    check expected facts, refusal behavior and returned source files
     """
 
     # generate rag response for case question
@@ -84,18 +83,6 @@ def evaluate_rag(case: dict, k: int = 3) -> dict:
 
     # extract answer text
     answer = response["answer"]
-
-    # find citation numbers such as [SOURCE 1]
-    citation_matches = re.findall(r"\[SOURCE\s+(\d+)\]", answer, re.IGNORECASE)
-
-    # convert citation numbers from strings into integers
-    citations = []
-
-    for number in citation_matches:
-        citations.append(int(number))
-
-    # create valid citation numbers based on returned sources
-    valid_numbers = set(range(1, len(response["sources"]) + 1))
 
     # check whether answer contains the refusal message
     refused = REFUSAL.lower() in answer.lower()
@@ -117,24 +104,20 @@ def evaluate_rag(case: dict, k: int = 3) -> dict:
     else:
         refusal_correct = refused
 
-    # check citation behavior
+    # check whether answerable cases return one of their expected source files
     if should_answer:
-        citation_behavior_correct = bool(citations)
-
-        if citation_behavior_correct:
-            for number in citations:
-                if number not in valid_numbers:
-                    citation_behavior_correct = False
-                    break
+        source_behavior_correct = bool(
+            set(response["sources"]) & set(case["expected_sources"])
+        )
     else:
-        citation_behavior_correct = not citations
+        source_behavior_correct = not response["sources"]
 
     return {
         "id": case["id"],
         "answer": answer,
         "expected_facts_found": expected_facts_found,
         "refusal_correct": refusal_correct,
-        "citation_behavior_correct": citation_behavior_correct,
+        "source_behavior_correct": source_behavior_correct,
     }
 
 # -----------------------------------------------------------------------------------------------------------------------------
