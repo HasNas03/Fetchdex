@@ -3,7 +3,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
-from source.assistant import assistant_search
+from source.rag import rag_search
 from source.semantic import index_documents, semantic_search
 
 
@@ -14,7 +14,12 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Fetchdex", description="AI Study Assistant.", version="2.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Fetchdex",
+    description="Semantic search and grounded RAG API.",
+    version="2.0.0",
+    lifespan=lifespan,
+)
 
 class AskRequest(BaseModel):
     """validate JSON body to ensure question field between 1 and 1000 length"""
@@ -48,20 +53,23 @@ def search(query: str = Query(..., min_length=1, max_length=1000), chunks: int =
 
 @app.post("/ask")
 def ask(request: AskRequest):
-    """
-    route a request through the LLM assistant and its tools
-    """
+    """answer a question using retrieved document evidence"""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Error: Question cannot be empty.")
 
     try:
+        response = rag_search(request.question)
         return {
             "query": request.question,
-            "answer": assistant_search(request.question),}
+            "answer": response["answer"],
+            "sources": list(dict.fromkeys(
+                source["source"] for source in response["sources"]
+            )),
+        }
 
     except ValueError as error: raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error: raise HTTPException(status_code=503, detail=str(error)) from error
-    except Exception as error: raise HTTPException(status_code=500, detail=f"Assistant failed: {error}") from error
+    except Exception as error: raise HTTPException(status_code=500, detail=f"RAG answer failed: {error}") from error
 
 
 @app.get("/health")
