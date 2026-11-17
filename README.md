@@ -1,9 +1,11 @@
-# Fetchdex (in-progress)
+# Fetchdex
 
-Fetchdex has two user-facing workflows:
+Fetchdex is an AI-based tool that uses your study notes as context so you can find and review what matters in seconds.
 
-1. **Semantic Search** returns matching document chunks without an LLM, uses embeddings and Chroma
-2. **AI Assistant** selects one of three tools: grounded RAG answer, list documents, or read a document.
+The Fetchdex API exposes 2 features: 
+
+1. **Semantic Search** returns matching document chunks using chunk-based embeddings, generating answers without an LLM.
+2. **Assistant Search** uses Ollama Qwen to retrieves relevant chunks as context and generate a cited answer.
 
 ## Setup
 
@@ -18,16 +20,11 @@ ollama pull qwen3:1.7b
 
 Ollama must be running for the AI Assistant. Semantic search does not use Qwen3.
 
-## Prepare the knowledge base
+## Documents and indexing
 
-Put `.txt` files in `documents/`, then inspect and index them:
-
-```bash
-python -m source.knowledge preview
-python -m source.knowledge index
-```
-
-Indexing writes generated data to `data/chroma/`.
+Put `.txt` files in `documents/`. Starting the API automatically loads,
+chunks, embeds, and synchronizes those documents with `data/chroma/`.
+Restart the API after changing the documents.
 
 ## Run the API
 
@@ -37,7 +34,7 @@ python -m uvicorn source.api:app --reload
 
 Open <http://127.0.0.1:8000/docs>.
 
-- `GET /search?q=...&k=3` runs non-generative semantic search.
+- `GET /search?query=...&chunks=3` runs non-generative semantic search.
 - `POST /ask` sends `{"question": "..."}` to the AI Assistant.
 - `GET /health` returns a liveness response.
 

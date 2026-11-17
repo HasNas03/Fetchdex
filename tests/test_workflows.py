@@ -11,10 +11,8 @@ from source import api, assistant, evaluation, rag, semantic
 
 
 SEARCH_RESULT = {
-    "chunk_id": "test_doc2.txt-0",
     "text": "AWS DMS can migrate databases.",
     "metadata": {"source": "test_doc2.txt", "chunk_number": 0},
-    "distance": 0.1,
 }
 
 
@@ -33,17 +31,41 @@ class WorkflowTests(unittest.TestCase):
         collection = types.SimpleNamespace(
             count=lambda: 1,
             query=lambda **_kwargs: {
-                "ids": [[SEARCH_RESULT["chunk_id"]]],
+                "ids": [["test_doc2.txt-0"]],
                 "documents": [[SEARCH_RESULT["text"]]],
                 "metadatas": [[SEARCH_RESULT["metadata"]]],
-                "distances": [[SEARCH_RESULT["distance"]]],
+                "distances": [[0.1]],
             },
         )
         with (
             patch.object(semantic, "get_collection", return_value=collection),
-            patch.object(semantic, "get_embedding_model", return_value=model),
+            patch.object(semantic, "SentenceTransformer", return_value=model),
         ):
             self.assertEqual(semantic.semantic_search("migration"), [SEARCH_RESULT])
+
+    def test_index_documents_removes_stale_chunks(self):
+        model = types.SimpleNamespace(
+            encode_document=lambda *_args, **_kwargs: [
+                types.SimpleNamespace(tolist=lambda: [1.0])
+            ]
+        )
+        collection = types.SimpleNamespace(
+            get=lambda: {"ids": ["old.txt-0"]},
+            upsert=lambda **_kwargs: None,
+            delete=lambda **kwargs: setattr(collection, "deleted", kwargs["ids"]),
+            count=lambda: 1,
+        )
+        with (
+            patch.object(
+                semantic,
+                "load_documents",
+                return_value=[{"source": "new.txt", "text": "new contents"}],
+            ),
+            patch.object(semantic, "SentenceTransformer", return_value=model),
+            patch.object(semantic, "get_collection", return_value=collection),
+        ):
+            self.assertEqual(semantic.index_documents(), 1)
+        self.assertEqual(collection.deleted, ["old.txt-0"])
 
     def test_grounded_rag_answer(self):
         response = types.SimpleNamespace(
@@ -56,6 +78,20 @@ class WorkflowTests(unittest.TestCase):
             result = rag.answer_question("Which service migrates databases?")
         self.assertEqual(result["sources"][0]["citation"], "SOURCE 1")
         self.assertIn("[SOURCE 1]", result["answer"])
+
+    def test_rag_handles_empty_model_response(self):
+        response = types.SimpleNamespace(
+            message=types.SimpleNamespace(content=None)
+        )
+        with (
+            patch.object(rag, "semantic_search", return_value=[SEARCH_RESULT]),
+            patch.object(rag, "chat", return_value=response),
+        ):
+            result = rag.answer_question("Which service migrates databases?")
+        self.assertEqual(
+            result["answer"],
+            "The local language model returned an empty response.",
+        )
 
     def test_list_and_read_document_tools(self):
         documents = [{"source": "notes.txt", "text": "Complete contents"}]
@@ -93,14 +129,37 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(answer, "AWS DMS. [SOURCE 1]")
 
     def test_api_exposes_two_workflows_and_health(self):
-        client = TestClient(api.app)
-        with patch.object(api, "semantic_search", return_value=[SEARCH_RESULT]):
-            self.assertEqual(client.get("/search?q=migration").status_code, 200)
-        with patch.object(api, "run_assistant", return_value="AWS DMS. [SOURCE 1]"):
+        with (
+            patch.object(api, "index_documents", return_value=1) as index,
+            patch.object(api, "semantic_search", return_value=[SEARCH_RESULT]),
+            patch.object(
+                api,
+                "assistant_search",
+                return_value="AWS DMS. [SOURCE 1]",
+            ),
+            TestClient(api.app) as client,
+        ):
+            self.assertEqual(
+                client.get("/search?query=migration&chunks=3").status_code,
+                200,
+            )
+            self.assertEqual(
+                client.get("/search?query=migration&chunks=3").json(),
+                {
+                    "query": "migration",
+                    "results": [
+                        {
+                            "text": "AWS DMS can migrate databases.",
+                            "source": "test_doc2.txt",
+                        }
+                    ],
+                },
+            )
             response = client.post("/ask", json={"question": "migration"})
             self.assertEqual(response.status_code, 200)
             self.assertIn("SOURCE 1", response.json()["answer"])
-        self.assertEqual(client.get("/health").json(), {"status": "ok"})
+            self.assertEqual(client.get("/health").json(), {"status": "ok"})
+        index.assert_called_once_with()
 
     def test_evaluation_dataset_matches_current_document_names(self):
         expected = {

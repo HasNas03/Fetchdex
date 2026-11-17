@@ -56,8 +56,6 @@ def source_metadata(results: list[dict]) -> list[dict]:
             # preserve the original filename and chunk number
             "source": result["metadata"]["source"],
             "chunk_number": result["metadata"]["chunk_number"],
-            # preserve the semantic-search distance for inspection or evaluation
-            "distance": result["distance"],
         }
         # start numbering at 1 to match build_context
         for number, result in enumerate(results, start=1)
@@ -112,7 +110,10 @@ def answer_question(question: str, k: int = 3) -> dict:
     return {
         "question": question,
         # ollama stores the generated text in response.message.content
-        "answer": response.message.content,
+        "answer": (
+            response.message.content
+            or "The local language model returned an empty response."
+        ),
         "sources": sources,
         "retrieved_chunks": results,
     }

@@ -1,4 +1,5 @@
 # responsible for indexing knowledge base and performing semantic search
+
 from functools import lru_cache
 from pathlib import Path
 import chromadb
@@ -11,50 +12,34 @@ COLLECTION_NAME = "personal_knowledge"
 
 # -----------------------------------------------------------------------------------------------------------------------------
 # HELPER FUNCTIONS
-# single document chunker (general function)
+# single document chunker (general)
 def chunk_text(text: str, chunk_size: int = 40, overlap: int = 10) -> list[str]:
     """
     split text into overlapping chunks
     chunk_size: maximum number of words per chunk
     overlap: number of repeated words between chunks
     """
-    # validate chunk size
+    # validate chunk size and validate overlap
     if chunk_size < 1: raise ValueError("chunk_size must be at least 1")
-    # validate overlap
     if overlap < 0 or overlap >= chunk_size: raise ValueError("overlap must be between 0 and chunk_size - 1")
 
-    # holds created chunks of the document
     chunks = []
-    # split text into words
     words = text.split()
 
     # start at first word
     start = 0
 
     while start < len(words):
-        # calculate chunk end
         end = start + chunk_size
-        # get words for current chunk
         chunk_words = words[start:end]
-        # join words into normal text
         chunk = " ".join(chunk_words)
-        # add chunk
         chunks.append(chunk)
         # move forward while preserving overlap
         start += chunk_size - overlap
-    # return list of chunks (str) for the input document
+
     return chunks
 
-# retrieve embedding model
-@lru_cache(maxsize=1)
-def get_embedding_model():
-    """
-    load and return the embedding model once per python process
-    """
-    model = SentenceTransformer(EMBEDDING_MODEL)
-    return model
-
-# retrieve collection (general)
+# retrieve chromadb collection (general)
 @lru_cache(maxsize=1)
 def get_collection():
     """
@@ -62,18 +47,13 @@ def get_collection():
     """
     # connect to persistent chroma database
     client = chromadb.PersistentClient(path=CHROMA_PATH)
-
     # get collection or create it if needed
-    collection = client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"},
-    )
-
+    collection = client.get_or_create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"},)
     return collection
 
-# store embeds in a collection (general)
+# add embeds in a collection (general)
 def store_embeds(collection, embedded_chunks: list[dict]) -> None:
-    """store embedded chunks in chroma"""
+    """add embedded chunks in chroma"""
     ids = []
     documents = []
     embeddings = []
@@ -99,16 +79,18 @@ def store_embeds(collection, embedded_chunks: list[dict]) -> None:
 
 # -----------------------------------------------------------------------------------------------------------------------------
 
-# 1. load our source documents
+# load our source documents
 def load_documents() -> list[dict]:
-    """load every .txt file from the documents folder
-    output: [{"source": "abc.txt", "text": "..."}, ...]
-    """
+    """load every .txt and .md file from the documents folder"""
     # holds every loaded document
     documents = []
 
-    # find and process every .txt file
-    for file_path in DOCUMENTS_FOLDER.glob("*.txt"):
+    # find and process every supported document
+    file_paths = sorted([
+        *DOCUMENTS_FOLDER.glob("*.txt"),
+        *DOCUMENTS_FOLDER.glob("*.md"),
+    ])
+    for file_path in file_paths:
         # read entire file
         text = file_path.read_text(encoding="utf-8")
         # store filename and contents
@@ -121,7 +103,7 @@ def load_documents() -> list[dict]:
 
     return documents
 
-# 2. chunk our source documents
+# chunk our source documents
 def chunk_documents(documents: list[dict]) -> list[dict]:
     """
     convert multiple documents into chunks while preserving their source metadata
@@ -147,7 +129,7 @@ def chunk_documents(documents: list[dict]) -> list[dict]:
 
     return all_chunks
 
-# 3. embed chunks
+# embed chunks
 def embed_documents(model, chunks: list[dict]) -> list[dict]:
     """
     convert every chunk into an embedding vector
@@ -170,24 +152,38 @@ def embed_documents(model, chunks: list[dict]) -> list[dict]:
 
     return embedded_chunks
 
-# 4. store embedded chunk objects in collection
+# Startup - load, chunk, embed, and store data into collection
 def index_documents() -> int:
-    """load, chunk, embed and store all documents """
-    # 1. load documents
+    """load, chunk, embed and synchronize all documents with Chroma"""
+    # 1. load all documents
     documents = load_documents()
     # 2. create chunks
     chunks = chunk_documents(documents)
-    # return early if nothing exists
-    if not chunks: return 0
-    # 3. get embedding model
-    model = get_embedding_model()
-    # 4. embed chunks
-    embedded_chunks = embed_documents(model, chunks)
-    # 5. get chroma collection
+
+    # 3. get chroma collection and its currently stored ids
     collection = get_collection()
-    # 6. store embedded chunks
+    existing_ids = collection.get()["ids"]
+
+    # clear the old index if no source content exists
+    if not chunks:
+        if existing_ids:
+            collection.delete(ids=existing_ids)
+        return 0
+
+    # 4. get embedding model
+    model = SentenceTransformer(EMBEDDING_MODEL)
+    # 5. embed chunks
+    embedded_chunks = embed_documents(model, chunks)
+    # 6. insert new chunks and update chunks with existing ids
     store_embeds(collection, embedded_chunks)
-    # 7. return total stored chunk count
+
+    # 7. delete stored chunks that no longer exist in the source documents
+    current_ids = {chunk["chunk_id"] for chunk in embedded_chunks}
+    stale_ids = [chunk_id for chunk_id in existing_ids if chunk_id not in current_ids]
+    if stale_ids:
+        collection.delete(ids=stale_ids)
+
+    # 8. return total stored chunk count
     return collection.count()
  
 # (MAIN) semantic search function (returns most semantically-similar chunks)
@@ -198,96 +194,27 @@ def semantic_search(query: str, k: int = 3) -> list[dict]:
     # validate k (how many top search results you want back)
     if k < 1: raise ValueError("k must be at least 1")
 
-    # get chroma collection
     collection = get_collection()
-    # get number of stored chunks
     collection_count = collection.count()
-    # return empty result if nothing is indexed
     if collection_count == 0: return []
 
     try:
-        # get embedding model
-        model = get_embedding_model()
+        model = SentenceTransformer(EMBEDDING_MODEL)
         # convert user query into embedding vector
         query_embedding = model.encode_query(query, normalize_embeddings=True).tolist()
         # search chroma for nearest embeddings
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=min(k, collection_count), # # of results (do not request more results than exist)
-        )
+        results = collection.query(query_embeddings=[query_embedding], n_results=min(k, collection_count)) # number of results (do not request more results than exist)
 
     except Exception as error: raise RuntimeError(f"Vector search failed: {error}") from error
 
-    # holds cleaned search results
-    search_results = []
     # chroma returns nested lists because it supports multiple queries
-    ids = results["ids"][0]
     documents = results["documents"][0] if results["documents"] is not None else []
     metadatas = results["metadatas"][0] if results["metadatas"] is not None else []
-    distances = results["distances"][0] if results["distances"] is not None else []
-    # combine matching result fields
-    for i in range(len(ids)):
-        result = {
-            "chunk_id": ids[i],
-            "text": documents[i],
-            "metadata": metadatas[i],
-            "distance": distances[i],
+    # combine each matching passage with its source metadata
+    return [
+        {
+            "text": text,
+            "metadata": metadata,
         }
-
-        search_results.append(result)
-
-    return search_results
-
-# -----------------------------------------------------------------------------------------------------------------------------
-
-# 9. preview chunks
-# def preview_documents() -> None:
-#     """
-#     load and chunk documents then print them for inspection
-#     """
-#     # load documents
-#     documents = load_documents()
-#     print(f"Loaded {len(documents)} documents")
-
-#     # chunk documents
-#     chunks = chunk_documents(documents)
-#     print(f"Created {len(chunks)} chunks\n")
-
-#     # print every chunk
-#     for chunk in chunks:
-#         print("=" * 70)
-#         print(f"CHUNK ID: {chunk['chunk_id']}")
-#         print(f"SOURCE: {chunk['source']}")
-#         print(f"CHUNK NUMBER: {chunk['chunk_number']}")
-#         print("-" * 70)
-#         print(chunk["text"])
-#         print()
-
-# ? 10. command line entry point
-# def main() -> None:
-#     """
-#     run either:
-
-#     python -m source.knowledge preview
-#     python -m source.knowledge index
-#     """
-#     import argparse
-
-#     # create command line parser
-#     parser = argparse.ArgumentParser(description="Prepare the Fetchdex knowledge base")
-#     # user must choose preview or index
-#     parser.add_argument("mode", choices=["preview", "index"])
-#     # read command line arguments
-#     args = parser.parse_args()
-#     # preview chunks
-#     # if args.mode == "preview":
-#     #     preview_documents()
-#     # index chunks
-#     # else:
-#     #     stored_count = index_documents()
-#     #     print(f"Stored {stored_count} chunks in Chroma")
-#     stored_count = index_documents()
-#     print(f"Stored {stored_count} chunks in Chroma")
-
-# if __name__ == "__main__":
-#     main()
+        for text, metadata in zip(documents, metadatas)
+    ]

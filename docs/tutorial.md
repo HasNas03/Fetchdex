@@ -62,7 +62,7 @@ The project does not train either model. It calls existing models locally.
 Fetchdex-Simplified/
 ├── source/
 │   ├── __init__.py      marks source as a Python package
-│   ├── knowledge.py     documents, chunks, embeddings, Chroma, search
+│   ├── semantic.py      documents, chunks, embeddings, Chroma, search
 │   ├── rag.py           retrieval-grounded generation and citations
 │   ├── assistant.py     tool definitions and agent loop
 │   ├── api.py           HTTP routes for search and assistant
@@ -83,7 +83,7 @@ There is no single file that executes everything. Each command starts at a diffe
 
 | Command or request | Entry point |
 |---|---|
-| `python -m source.knowledge index` | `knowledge.main()` |
+| Start the API | `api.lifespan()` → `semantic.index_documents()` |
 | `GET /search` | `api.search()` |
 | `POST /ask` | `api.ask()` |
 | `python -m source.assistant "..."` | `assistant.main()` |
@@ -93,12 +93,8 @@ There is no single file that executes everything. Each command starts at a diffe
 
 All four flows depend on the source documents. Semantic search and RAG also depend on the Chroma index.
 
-Run:
-
-```bash
-python -m source.knowledge preview
-python -m source.knowledge index
-```
+Starting the API builds and synchronizes the index automatically. Restart the
+API after adding, changing, or removing documents.
 
 The indexing sequence is:
 
@@ -116,13 +112,13 @@ get_collection()
 collection.upsert(...)
 ```
 
-### File: `source/knowledge.py`
+### File: `source/semantic.py`
 
 This file owns the complete knowledge-base lifecycle.
 
 | Function | What it does |
 |---|---|
-| `load_documents()` | Reads sorted `.txt` files and returns filename/text dictionaries. |
+| `load_documents()` | Reads `.txt` files and returns filename/text dictionaries. |
 | `chunk_text()` | Splits one string into overlapping 40-word windows with 10-word overlap. |
 | `chunk_documents()` | Applies chunking to every document and adds source metadata. |
 | `get_embedding_model()` | Lazily loads MiniLM once per Python process. |
@@ -151,11 +147,11 @@ chunk 2: words 60–99
 Return relevant document passages without asking Qwen3 to produce an answer.
 
 ```text
-GET /search?q=database+migration&k=3
+GET /search?query=database+migration&chunks=3
       ↓
 api.search()
       ↓
-knowledge.semantic_search()
+semantic.semantic_search()
       ↓
 MiniLM encodes the question
       ↓
@@ -181,7 +177,7 @@ It converts application errors into HTTP responses:
 | Embedding/database search failure | 503 |
 | Unexpected failure | 500 |
 
-### `source/knowledge.py`
+### `source/semantic.py`
 
 `semantic_search(query, k)` performs the actual workflow:
 
@@ -231,7 +227,7 @@ POST /ask
       ↓
 api.ask()
       ↓
-assistant.run_assistant()
+assistant.assistant_search()
       ↓
 Qwen3 selects grounded_answer
       ↓
@@ -251,7 +247,7 @@ This normally requires two Qwen3 calls:
 1. The assistant-routing call selects `grounded_answer`.
 2. The RAG-generation call writes the evidence-based answer.
 
-There is no third formatting call because `run_assistant()` recognizes that RAG already produced the final answer.
+There is no third formatting call because `assistant_search()` recognizes that RAG already produced the final answer.
 
 ## Files and functions
 
@@ -263,7 +259,7 @@ There is no third formatting call because `run_assistant()` recognizes that RAG 
 {"question": "Which AWS service can migrate databases?"}
 ```
 
-`ask()` rejects whitespace-only questions, calls `run_assistant()`, and returns:
+`ask()` rejects whitespace-only questions, calls `assistant_search()`, and returns:
 
 ```json
 {
@@ -274,7 +270,7 @@ There is no third formatting call because `run_assistant()` recognizes that RAG 
 
 ### `source/assistant.py`
 
-`run_assistant()` sends the user message, system prompt, and three tool definitions to Qwen3. For a document-content question, the prompt requires `grounded_answer()`.
+`assistant_search()` sends the user message, system prompt, and three tool definitions to Qwen3. For a document-content question, the prompt requires `grounded_answer()`.
 
 `grounded_answer(question, k)` is a small adapter. It calls `rag.answer_question()` and returns its final answer text.
 
@@ -326,11 +322,11 @@ POST /ask
       ↓
 api.ask()
       ↓
-assistant.run_assistant()
+assistant.assistant_search()
       ↓
 Qwen3 selects list_documents
       ↓
-knowledge.load_documents()
+semantic.load_documents()
       ↓
 filenames return to Qwen3
       ↓
@@ -343,9 +339,9 @@ Qwen3 presents the list
 
 `list_documents()` calls `load_documents()`, selects each `source` filename, and serializes the list as JSON text. Tool messages must contain text, so JSON is a convenient structured representation.
 
-`run_assistant()` appends that tool result to the conversation and asks Qwen3 to produce the user-facing response.
+`assistant_search()` appends that tool result to the conversation and asks Qwen3 to produce the user-facing response.
 
-### `source/knowledge.py`
+### `source/semantic.py`
 
 `load_documents()` reads current files directly from `documents/`. Therefore, newly added filenames can appear in this flow before they are indexed in Chroma.
 
@@ -367,11 +363,11 @@ POST /ask
       ↓
 api.ask()
       ↓
-assistant.run_assistant()
+assistant.assistant_search()
       ↓
 Qwen3 selects read_document(name)
       ↓
-knowledge.load_documents()
+semantic.load_documents()
       ↓
 exact filename match
       ↓
@@ -392,7 +388,7 @@ Qwen3 responds to the user
 4. Returns the complete text on a match.
 5. Returns a clear “not found” message otherwise.
 
-`run_assistant()` executes the function with arguments selected by Qwen3:
+`assistant_search()` executes the function with arguments selected by Qwen3:
 
 ```python
 function(**call.function.arguments)
@@ -404,7 +400,7 @@ If the arguments are `{"name": "test_doc2.txt"}`, this is equivalent to:
 read_document(name="test_doc2.txt")
 ```
 
-### `source/knowledge.py`
+### `source/semantic.py`
 
 `load_documents()` supplies the complete text. This flow reads from disk and does not reconstruct the document from indexed chunks.
 
@@ -521,7 +517,7 @@ The evaluation is deterministic in how it scores text, but generated answers can
 
 # 11. Complete Function Map
 
-## `source/knowledge.py`
+## `source/semantic.py`
 
 ```text
 load_documents
@@ -552,17 +548,18 @@ answer_question
 ## `source/assistant.py`
 
 ```text
-run_assistant
+assistant_search
       ├── grounded_answer → rag.answer_question
-      ├── list_documents → knowledge.load_documents
-      └── read_document  → knowledge.load_documents
+      ├── list_documents → semantic.load_documents
+      └── read_document  → semantic.load_documents
 ```
 
 ## `source/api.py`
 
 ```text
-search → knowledge.semantic_search
-ask    → assistant.run_assistant
+lifespan → semantic.index_documents
+search → semantic.semantic_search
+ask    → assistant.assistant_search
 health → static liveness dictionary
 ```
 
@@ -583,8 +580,6 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 ollama pull qwen3:1.7b
-python -m source.knowledge preview
-python -m source.knowledge index
 python -m uvicorn source.api:app --reload
 ```
 
@@ -598,8 +593,8 @@ HTTP examples:
 
 ```bash
 curl --get http://127.0.0.1:8000/search \
-  --data-urlencode 'q=database migration' \
-  --data-urlencode 'k=3'
+  --data-urlencode 'query=database migration' \
+  --data-urlencode 'chunks=3'
 ```
 
 ```bash

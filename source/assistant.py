@@ -104,23 +104,16 @@ def assistant_search(user_message: str, max_steps: int = 5) -> str:
 # -----------------------------------------------------------------------------------------------------------------------------
 # COMMAND-LINE ENTRY POINT
 
-# def main() -> None:
-#     """
-#     run one assistant question from the command line
-#     """
-#     # import command-line parsing only when this entry point is used
-#     import argparse
+def main() -> None:
+    """run one assistant question from the command line"""
+    import argparse
 
-#     # create the command-line parser
-#     parser = argparse.ArgumentParser(description="Ask the Fetchdex AI Assistant.")
-#     # require one question or document request
-#     parser.add_argument("question", help="Question or document request")
-#     # read the user's command-line input
-#     args = parser.parse_args()
-#     # run the main assistant flow and print its answer
-#     print(assistant_search(args.question))
+    parser = argparse.ArgumentParser(description="Ask the Fetchdex AI Assistant.")
+    parser.add_argument("question", help="Question or document request")
+    args = parser.parse_args()
+    print(assistant_search(args.question))
 
 
 # run main() only when this file is executed as a module
-# if __name__ == "__main__":
-#     main()
+if __name__ == "__main__":
+    main()
